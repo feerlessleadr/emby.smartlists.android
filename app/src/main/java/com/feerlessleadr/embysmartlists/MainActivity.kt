@@ -16,6 +16,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.feerlessleadr.embysmartlists.ui.BackupsScreen
 import com.feerlessleadr.embysmartlists.ui.EmbySmartListsTheme
 import com.feerlessleadr.embysmartlists.ui.ListsScreen
 import com.feerlessleadr.embysmartlists.ui.ListsViewModel
@@ -32,13 +33,15 @@ class MainActivity : ComponentActivity() {
         val container = (application as App).container
         setContent {
             val mode by container.settings.themeMode.collectAsStateWithLifecycle()
+            val accent by container.settings.accent.collectAsStateWithLifecycle()
+            val dynamic by container.settings.dynamicColor.collectAsStateWithLifecycle()
             val dark = useDarkTheme(mode)
             // Keep the status and navigation bar icons readable when the chosen theme differs from the phone's.
             LaunchedEffect(dark) {
                 val style = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark }
                 enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
             }
-            EmbySmartListsTheme(mode) {
+            EmbySmartListsTheme(mode, accent, dynamic) {
                 Root(container)
             }
         }
@@ -66,18 +69,29 @@ private fun SignedIn(container: AppContainer, token: String) {
         composable("lists") {
             ListsScreen(
                 vm = listsVm,
+                container = container,
                 onNew = { nav.navigate("editor/new") },
                 onEdit = { id -> nav.navigate("editor/$id") },
+                onDuplicate = { id -> nav.navigate("editor/copy-$id") },
                 onSettings = { nav.navigate("settings") },
             )
         }
         composable("editor/{id}") { entry ->
-            val id = entry.arguments?.getString("id")?.takeIf { it != "new" }
-            val vm: EditorViewModel = viewModel(key = "editor-$token-${id ?: "new"}", factory = viewModelFactory { initializer { EditorViewModel(container, id) } })
+            val raw = entry.arguments?.getString("id").orEmpty()
+            // "copy-<id>" starts a new list from an existing one; "new" starts from a template; anything else edits that list.
+            val copyOf = raw.removePrefix("copy-").takeIf { raw.startsWith("copy-") }
+            val id = raw.takeIf { it != "new" && copyOf == null }
+            val vm: EditorViewModel = viewModel(
+                key = "editor-$token-$raw",
+                factory = viewModelFactory { initializer { EditorViewModel(container, id, copyOf) } },
+            )
             EditorScreen(vm, onClose = { nav.popBackStack() })
         }
         composable("settings") {
-            SettingsScreen(container, onBack = { nav.popBackStack() })
+            SettingsScreen(container, onBack = { nav.popBackStack() }, onBackups = { nav.navigate("backups") })
+        }
+        composable("backups") {
+            BackupsScreen(container, onBack = { nav.popBackStack() })
         }
     }
 }

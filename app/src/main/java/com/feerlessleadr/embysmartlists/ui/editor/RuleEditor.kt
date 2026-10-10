@@ -1,5 +1,6 @@
 package com.feerlessleadr.embysmartlists.ui.editor
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,7 +12,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DatePicker
@@ -34,11 +38,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.feerlessleadr.embysmartlists.data.Catalog
 import com.feerlessleadr.embysmartlists.data.EmbyUser
 import com.feerlessleadr.embysmartlists.data.FieldInfo
 import com.feerlessleadr.embysmartlists.data.RuleDraft
+import com.feerlessleadr.embysmartlists.data.toJson
+import com.feerlessleadr.embysmartlists.ui.Describe
 import com.feerlessleadr.embysmartlists.data.ValueOption
 import kotlinx.serialization.json.JsonPrimitive
 import java.time.Instant
@@ -76,7 +83,10 @@ private fun kindOf(operator: String) = when (operator) {
     else -> OperatorKind.Plain
 }
 
-/** One rule: field, operator, a value input that fits them, and the field-specific switches. */
+/**
+ * One rule: field, operator, a value input that fits them, and the field-specific switches. Folded, it is one line
+ * in words ("Date Added newer than 30 days"); [expanded] opens the inputs.
+ */
 @Composable
 fun RuleCard(
     rule: RuleDraft,
@@ -84,11 +94,31 @@ fun RuleCard(
     fields: List<FieldInfo>,
     libraries: List<ValueOption>,
     users: List<EmbyUser>,
+    expanded: Boolean,
+    onToggle: () -> Unit,
     onChange: (RuleDraft) -> Unit,
+    onDuplicate: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val info = catalog.field(rule.field)
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), modifier = Modifier.fillMaxWidth()) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), modifier = Modifier.fillMaxWidth().animateContentSize()) {
+        if (!expanded) {
+            val incomplete = rule.value.isBlank() && info?.type != "Boolean"
+            Row(Modifier.clickable(onClick = onToggle).padding(start = 14.dp, top = 4.dp, bottom = 4.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (incomplete) "${catalog.fieldLabel(rule.field)} (needs a value)" else Describe.rule(rule.toJson(), catalog),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (incomplete) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(vertical = 8.dp),
+                )
+                Icon(Icons.Default.ExpandMore, contentDescription = "Edit rule")
+                IconButton(onClick = onDuplicate) { Icon(Icons.Default.ContentCopy, contentDescription = "Duplicate rule") }
+                IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, contentDescription = "Remove rule", tint = MaterialTheme.colorScheme.error) }
+            }
+            return@Card
+        }
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 PickerField(
@@ -102,6 +132,8 @@ fun RuleCard(
                     },
                     modifier = Modifier.weight(1f),
                 )
+                IconButton(onClick = onToggle) { Icon(Icons.Default.ExpandLess, contentDescription = "Fold rule") }
+                IconButton(onClick = onDuplicate) { Icon(Icons.Default.ContentCopy, contentDescription = "Duplicate rule") }
                 IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, contentDescription = "Remove rule", tint = MaterialTheme.colorScheme.error) }
             }
 
@@ -140,7 +172,6 @@ fun RuleCard(
         }
     }
 }
-
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun RuleValueInput(

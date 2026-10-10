@@ -187,6 +187,32 @@ val RANDOM_GROUP_FIELDS = listOf(
     "Album" to "Album",
 )
 
+/** A copy of [rule] with its own key, so both can sit in the same list. */
+fun RuleDraft.duplicated(): RuleDraft = copy(key = DraftKeys.next())
+
+/** The groups with [ruleKey] duplicated right after the original, inside the same group ([copy] when the caller made it). */
+fun List<GroupDraft>.withRuleDuplicated(groupKey: Long, ruleKey: Long, copy: RuleDraft? = null): List<GroupDraft> = map { group ->
+    if (group.key != groupKey) {
+        group
+    } else {
+        group.copy(rules = group.rules.flatMap { r -> if (r.key == ruleKey) listOf(r, copy ?: r.duplicated()) else listOf(r) })
+    }
+}
+
+/** The rule as the plugin's JSON (also used to describe it in words). */
+fun RuleDraft.toJson(): JsonObject = JsonObject(
+    extras.toMutableMap().also {
+        it["MemberName"] = JsonPrimitive(field)
+        it["Operator"] = JsonPrimitive(operator)
+        it["TargetValue"] = JsonPrimitive(value)
+    },
+)
+
+/** The groups with [groupKey] duplicated right after the original (an "or" alternative with the same rules). */
+fun List<GroupDraft>.withGroupDuplicated(groupKey: Long): List<GroupDraft> = flatMap { group ->
+    if (group.key == groupKey) listOf(group, group.copy(key = DraftKeys.next(), rules = group.rules.map { it.duplicated() })) else listOf(group)
+}
+
 /** A smart list being created or edited. */
 data class ListDraft(
     /** The list JSON this draft came from (null for a new list): properties not shown here are kept on save. */
@@ -227,6 +253,26 @@ data class ListDraft(
     val bumpers: BumperDraft? = null,
 ) {
     val isNew: Boolean get() = original == null
+
+    /**
+     * This list as the start of a new one: same rules, sorting, schedules and options, a new name, and none of what
+     * belongs to the existing list (its id, its Emby playlist ids, its images).
+     */
+    fun asCopy(): ListDraft = copy(
+        original = null,
+        name = if (name.endsWith(" (copy)")) name else "$name (copy)",
+        groups = groups.map { g -> g.copy(key = DraftKeys.next(), rules = g.rules.map { it.duplicated() }) },
+        sorts = sorts.map { it.copy(key = DraftKeys.next()) },
+        schedules = schedules.map { it.copy(key = DraftKeys.next()) },
+        visibilitySchedules = visibilitySchedules.map { it.copy(key = DraftKeys.next()) },
+    )
+
+    /**
+     * This list as something to hand to someone else: like [asCopy] but with the name kept. The users are left out
+     * (they are ids on this server); whoever imports it picks their own.
+     */
+    fun forSharing(): ListDraft = asCopy().copy(name = name, ownerId = null, users = emptyList(), allUsers = false)
+
     val isCollection: Boolean get() = type == "Collection"
     val hasSimilarRule: Boolean get() = groups.any { g -> g.rules.any { it.field == "SimilarTo" } }
 
@@ -440,6 +486,27 @@ data class ListDraft(
                         extras = JsonObject(it.filterKeys { k -> k !in setOf("ExpressionSets", "MediaTypes", "BumperOrder", "Interval") }),
                     )
                 },
+            )
+        }
+
+        /**
+         * Reads a shared list (JSON pasted or opened from a file) as a new list owned by [ownerId]. Returns null when the
+         * text is not the JSON of a smart list. Anything that identified the list on the other server is dropped by
+         * [asCopy] and by [toJson] (the original is not kept).
+         */
+        fun fromShared(text: String, ownerId: String?): ListDraft? {
+            val json = try {
+                AppJson.parseToJsonElement(text) as? JsonObject
+            } catch (e: Exception) {
+                null
+            } ?: return null
+            if (json["Name"] == null || json["MediaTypes"] == null) return null
+            val draft = from(SmartListDoc(json)).asCopy()
+            return draft.copy(
+                name = json.stringAt("Name").orEmpty(),
+                ownerId = ownerId,
+                users = listOfNotNull(ownerId),
+                allUsers = false,
             )
         }
 

@@ -10,6 +10,8 @@ import com.feerlessleadr.embysmartlists.data.Catalog
 import com.feerlessleadr.embysmartlists.data.EmbyUser
 import com.feerlessleadr.embysmartlists.data.ImageInfo
 import com.feerlessleadr.embysmartlists.data.ListDraft
+import com.feerlessleadr.embysmartlists.data.Preview
+import com.feerlessleadr.embysmartlists.data.Swatch
 import com.feerlessleadr.embysmartlists.data.Templates
 import com.feerlessleadr.embysmartlists.data.ValueOption
 import kotlinx.coroutines.async
@@ -19,6 +21,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonObject
 
 data class EditorUiState(
     val loading: Boolean = true,
@@ -38,11 +41,23 @@ data class EditorUiState(
     val previews: Map<String, Bitmap> = emptyMap(),
     val imageBusy: Boolean = false,
     val imageMessage: String? = null,
-)
+    /** The draft as it was when editing began, to tell whether anything changed. */
+    val baseline: JsonObject? = null,
+    /** The colour this list is marked with in the overview (kept on this phone), and what it was at the start. */
+    val listColor: Swatch? = null,
+    val baselineColor: Swatch? = null,
+    /** A preview of the list's contents: null while no preview is open. */
+    val preview: PreviewUiState? = null,
+) {
+    /** True when the form differs from what was loaded (a freshly chosen template that was not touched is not a change). */
+    val dirty: Boolean get() = draft != null && baseline != null && (draft.toJson() != baseline || listColor != baselineColor)
+}
+
+data class PreviewUiState(val loading: Boolean = true, val result: Preview? = null, val error: String? = null)
 
 /** Creates a new list (when [listId] is null) or edits an existing one. */
-class EditorViewModel(private val container: AppContainer, private val listId: String?) : ViewModel() {
-    private val _state = MutableStateFlow(EditorUiState(choosingTemplate = listId == null))
+class EditorViewModel(private val container: AppContainer, private val listId: String?, private val copyOf: String? = null) : ViewModel() {
+    private val _state = MutableStateFlow(EditorUiState(choosingTemplate = listId == null && copyOf == null))
     val state: StateFlow<EditorUiState> = _state.asStateFlow()
 
     init {
@@ -59,16 +74,22 @@ class EditorViewModel(private val container: AppContainer, private val listId: S
                     val users = async { runCatching { api.users() }.getOrDefault(emptyList()) }
                     val libraries = async { runCatching { api.libraries() }.getOrDefault(emptyList()) }
                     val similarity = async { runCatching { api.similarityFields() }.getOrDefault(emptyList()) }
-                    val doc = listId?.let { id -> async { api.list(id) } }
+                    val doc = (listId ?: copyOf)?.let { id -> async { api.list(id) } }
                     val loadedUsers = users.await()
+                    val loadedDraft = doc?.await()?.let { d -> ListDraft.from(d).let { draft -> if (copyOf != null) draft.asCopy() else draft } }
+                    val color = listId?.let { id -> container.settings.listColors.value[id] }
                     _state.update {
+                        val draft = loadedDraft ?: it.draft
                         it.copy(
                             loading = false,
                             catalog = catalog.await(),
                             users = loadedUsers,
                             libraries = libraries.await(),
                             similarityFields = similarity.await(),
-                            draft = doc?.await()?.let(ListDraft::from) ?: it.draft,
+                            draft = draft,
+                            baseline = if (loadedDraft != null) loadedDraft.toJson() else it.baseline,
+                            listColor = if (loadedDraft != null) color else it.listColor,
+                            baselineColor = if (loadedDraft != null) color else it.baselineColor,
                         )
                     }
                 }
@@ -83,7 +104,52 @@ class EditorViewModel(private val container: AppContainer, private val listId: S
         val users = _state.value.users
         val me = container.session.value?.userId
         val owner = users.firstOrNull { it.id.equals(me, ignoreCase = true) }?.id ?: users.firstOrNull()?.id
-        _state.update { it.copy(draft = Templates.draft(id, owner), choosingTemplate = false) }
+        val draft = Templates.draft(id, owner)
+        _state.update { it.copy(draft = draft, baseline = draft.toJson(), choosingTemplate = false) }
+    }
+
+    /** Starts a new list from shared JSON. Returns a sentence to show when the text is not a list, or null on success. */
+    fun importShared(text: String): String? {
+        val users = _state.value.users
+        val me = container.session.value?.userId
+        val owner = users.firstOrNull { it.id.equals(me, ignoreCase = true) }?.id ?: users.firstOrNull()?.id
+        val draft = ListDraft.fromShared(text, owner) ?: return "That is not a shared SmartLists list."
+        _state.update { it.copy(draft = draft, baseline = draft.toJson(), choosingTemplate = false) }
+        return null
+    }
+
+    fun setListColor(swatch: Swatch?) {
+        _state.update { it.copy(listColor = swatch) }
+    }
+
+    /** Asks the server which items the list as edited would contain (needs plugin 0.1.10 or newer). */
+    fun preview() {
+        val s = _state.value
+        val draft = s.draft ?: return
+        val named = if (draft.name.isBlank()) draft.copy(name = "Preview") else draft
+        named.validate(s.catalog)?.let { problem ->
+            _state.update { it.copy(preview = PreviewUiState(loading = false, error = problem)) }
+            return
+        }
+        _state.update { it.copy(preview = PreviewUiState(loading = true)) }
+        viewModelScope.launch {
+            val api = container.api() ?: return@launch
+            try {
+                val result = api.preview(named.toJson())
+                _state.update { it.copy(preview = PreviewUiState(loading = false, result = result)) }
+            } catch (e: ApiException) {
+                if (e.isUnauthorized) {
+                    container.signOut()
+                } else {
+                    val text = if (e.status == 404) "Preview needs SmartLists plugin 0.1.10 or newer on your server." else e.message.orEmpty()
+                    _state.update { it.copy(preview = PreviewUiState(loading = false, error = text)) }
+                }
+            }
+        }
+    }
+
+    fun closePreview() {
+        _state.update { it.copy(preview = null) }
     }
 
     fun update(change: (ListDraft) -> ListDraft) {
@@ -102,7 +168,9 @@ class EditorViewModel(private val container: AppContainer, private val listId: S
             _state.update { it.copy(saving = true, saveError = null) }
             try {
                 val json = draft.toJson()
-                if (draft.isNew) api.create(json) else api.update(listId.orEmpty(), json)
+                val saved = if (draft.isNew) api.create(json) else api.update(listId.orEmpty(), json)
+                // The colour mark lives on this phone, keyed by the list's id.
+                saved.id.ifBlank { listId.orEmpty() }.takeIf { it.isNotBlank() }?.let { container.settings.setListColor(it, s.listColor) }
                 container.notifyListsChanged()
                 _state.update { it.copy(saving = false) }
                 onSaved()

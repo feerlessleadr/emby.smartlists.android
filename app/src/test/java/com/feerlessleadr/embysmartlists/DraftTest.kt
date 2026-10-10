@@ -8,6 +8,8 @@ import com.feerlessleadr.embysmartlists.data.SmartListDoc
 import com.feerlessleadr.embysmartlists.data.Templates
 import com.feerlessleadr.embysmartlists.data.ThemeMode
 import com.feerlessleadr.embysmartlists.data.fieldsFor
+import com.feerlessleadr.embysmartlists.data.withGroupDuplicated
+import com.feerlessleadr.embysmartlists.data.withRuleDuplicated
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -307,5 +309,54 @@ class DraftTest {
     @Test fun `a random group needs something to group by`() {
         val draft = Templates.draft("blank", "u1").copy(name = "x", randomGroup = com.feerlessleadr.embysmartlists.data.RandomGroupDraft(enabled = true, groupBy = null))
         assertTrue(draft.validate(catalog)!!.contains("group"))
+    }
+
+    // ----- duplicating -----
+
+    private fun rule(field: String, value: String) = com.feerlessleadr.embysmartlists.data.RuleDraft(field = field, operator = "Equal", value = value)
+
+    @Test fun `a duplicated rule sits right after the original with its own key and the same settings`() {
+        val a = rule("Name", "A").withExtra("UserId", JsonPrimitive("u1"))
+        val b = rule("Name", "B")
+        val group = com.feerlessleadr.embysmartlists.data.GroupDraft(rules = listOf(a, b))
+
+        val result = listOf(group).withRuleDuplicated(group.key, a.key).single().rules
+        assertEquals(listOf("A", "A", "B"), result.map { it.value })
+        assertEquals(3, result.map { it.key }.toSet().size)
+        assertEquals("u1", result[1].extraString("UserId"))
+        assertEquals(a.key, result[0].key)
+    }
+
+    @Test fun `duplicating a rule in one group leaves other groups alone`() {
+        val g1 = com.feerlessleadr.embysmartlists.data.GroupDraft(rules = listOf(rule("Name", "A")))
+        val g2 = com.feerlessleadr.embysmartlists.data.GroupDraft(rules = listOf(rule("Name", "B")))
+        val result = listOf(g1, g2).withRuleDuplicated(g2.key, g2.rules[0].key)
+        assertEquals(1, result[0].rules.size)
+        assertEquals(2, result[1].rules.size)
+    }
+
+    @Test fun `a duplicated group is an extra alternative with the same rules and new keys`() {
+        val g1 = com.feerlessleadr.embysmartlists.data.GroupDraft(rules = listOf(rule("Name", "A"), rule("Tags", "x")))
+        val result = listOf(g1).withGroupDuplicated(g1.key)
+        assertEquals(2, result.size)
+        assertEquals(result[0].rules.map { it.value }, result[1].rules.map { it.value })
+        assertEquals(4, result.flatMap { g -> g.rules.map { it.key } }.toSet().size)
+        assertTrue(result[0].key != result[1].key)
+    }
+
+    @Test fun `a list copy is a new list with the same settings and none of the old one's identity`() {
+        val copy = ListDraft.from(full).asCopy()
+
+        assertTrue(copy.isNew)
+        assertEquals("Full (copy)", copy.name)
+        assertEquals(listOf("Weekly", "Interval"), copy.schedules.map { it.trigger })
+        assertEquals(listOf("u1", "u2"), copy.users)
+        assertEquals("Genres", copy.randomGroup.groupBy)
+
+        val json = copy.toJson()
+        assertFalse(json.containsKey("Id"))
+        assertFalse(json.containsKey("PlaylistId"))
+        assertTrue(json["UserPlaylists"]!!.jsonArray.none { it.jsonObject.containsKey("PlaylistId") })
+        assertEquals("Full (copy)", copy.asCopy().name) // copying a copy does not pile up suffixes
     }
 }

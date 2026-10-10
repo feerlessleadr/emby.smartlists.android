@@ -94,6 +94,20 @@ object Describe {
         }
     }
 
+    /** "Oct 10, 1:44 AM": a date and time for things that should not read "in 0 minutes" when two clocks differ a little. */
+    fun dateTime(context: android.content.Context, iso: String?): String {
+        if (iso.isNullOrBlank()) return "Unknown time"
+        return try {
+            DateUtils.formatDateTime(
+                context,
+                Instant.parse(iso).toEpochMilli(),
+                DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_TIME or DateUtils.FORMAT_SHOW_YEAR or DateUtils.FORMAT_ABBREV_MONTH,
+            )
+        } catch (e: Exception) {
+            iso
+        }
+    }
+
     fun summary(doc: SmartListDoc): String {
         val parts = mutableListOf<String>()
         val count = doc.itemCount

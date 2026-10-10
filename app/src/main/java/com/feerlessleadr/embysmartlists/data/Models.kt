@@ -134,6 +134,15 @@ class SmartListDoc(val json: JsonObject) {
     val mediaTypes: List<String> get() = strings("MediaTypes")
     val userId: String? get() = string("UserId")
 
+    /** The Emby item of the list (the playlist of the first user, or the collection), for its cover image. */
+    val embyItemId: String?
+        get() = if (isCollection) {
+            string("CollectionId")?.takeIf { it.isNotBlank() }
+        } else {
+            ((json["UserPlaylists"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.stringAt("PlaylistId") }.firstOrNull { it.isNotBlank() })
+                ?: string("PlaylistId")?.takeIf { it.isNotBlank() }
+        }
+
     /** The rule groups: groups are OR-ed, the rules inside a group are AND-ed. */
     val ruleGroups: List<List<JsonObject>>
         get() = (json["ExpressionSets"] as? JsonArray).orEmpty().map { set ->
@@ -163,3 +172,27 @@ fun JsonObject.ruleOperator(): String = (this["Operator"] as? JsonPrimitive)?.co
 fun JsonObject.ruleValue(): String = (this["TargetValue"] as? JsonPrimitive)?.contentOrNull.orEmpty()
 fun JsonObject.intOrNullAt(key: String): Int? = (this[key] as? JsonPrimitive)?.intOrNull
 fun JsonObject.stringAt(key: String): String? = (this[key] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.contentOrNull
+
+
+/** One item of a preview (POST /preview). */
+data class PreviewItem(val id: Long, val name: String, val type: String, val detail: String?)
+
+/** What a list's rules would pick right now: the full count and the first items. */
+data class Preview(val total: Int, val items: List<PreviewItem>)
+
+/** A refresh running right now for a list. */
+data class RunningRefresh(val processed: Int, val total: Int)
+
+/** How a list's last refresh went (GET /Status/History). */
+data class RefreshOutcome(val success: Boolean, val error: String?, val endTime: String?)
+
+/** Refreshes in progress and the last outcome per list, by list id. */
+data class RefreshStatus(val running: Map<String, RunningRefresh>, val last: Map<String, RefreshOutcome>) {
+    companion object { val Empty = RefreshStatus(emptyMap(), emptyMap()) }
+}
+
+/** A plugin backup file (GET /backups). */
+data class BackupInfo(val filename: String, val createdAt: String?, val sizeBytes: Long, val listCount: Int)
+
+/** What a restore did (POST /backups/{file}/restore). */
+data class RestoreResult(val restored: Int, val overwritten: Int, val skipped: Int, val errors: Int)

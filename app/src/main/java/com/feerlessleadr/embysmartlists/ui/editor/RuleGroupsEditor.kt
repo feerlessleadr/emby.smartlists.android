@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -18,6 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -26,6 +28,9 @@ import com.feerlessleadr.embysmartlists.data.EmbyUser
 import com.feerlessleadr.embysmartlists.data.FieldInfo
 import com.feerlessleadr.embysmartlists.data.GroupDraft
 import com.feerlessleadr.embysmartlists.data.ValueOption
+import com.feerlessleadr.embysmartlists.data.duplicated
+import com.feerlessleadr.embysmartlists.data.withGroupDuplicated
+import com.feerlessleadr.embysmartlists.data.withRuleDuplicated
 
 /**
  * The rule groups of a list (or of its bumpers): groups are alternatives, the rules inside a group all apply.
@@ -42,6 +47,10 @@ fun RuleGroupsEditor(
     onGroups: ((List<GroupDraft>) -> List<GroupDraft>) -> Unit,
 ) {
     var addRuleTo by remember { mutableStateOf<Long?>(null) }
+    // A rule is open when it was opened by hand, or while it still needs a value (and was not folded by hand).
+    var opened by rememberSaveable { mutableStateOf<List<Long>>(emptyList()) }
+    var folded by rememberSaveable { mutableStateOf<List<Long>>(emptyList()) }
+    fun isOpen(rule: com.feerlessleadr.embysmartlists.data.RuleDraft) = rule.key in opened || (rule.key !in folded && rule.value.isBlank() && catalog.field(rule.field)?.type != "Boolean")
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
@@ -61,8 +70,23 @@ fun RuleGroupsEditor(
                                 fields = fields,
                                 libraries = libraries,
                                 users = users,
+                                expanded = isOpen(rule),
+                                onToggle = {
+                                    if (isOpen(rule)) {
+                                        opened = opened - rule.key
+                                        folded = folded + rule.key
+                                    } else {
+                                        folded = folded - rule.key
+                                        opened = opened + rule.key
+                                    }
+                                },
                                 onChange = { changed ->
                                     onGroups { gs -> gs.map { g -> if (g.key == group.key) g.copy(rules = g.rules.map { if (it.key == rule.key) changed else it }) else g } }
+                                },
+                                onDuplicate = {
+                                    val copy = rule.duplicated()
+                                    opened = opened + copy.key
+                                    onGroups { gs -> gs.withRuleDuplicated(group.key, rule.key, copy) }
                                 },
                                 onDelete = {
                                     onGroups { gs -> gs.map { g -> if (g.key == group.key) g.copy(rules = g.rules.filterNot { it.key == rule.key }) else g } }
@@ -74,6 +98,12 @@ fun RuleGroupsEditor(
                         TextButton(onClick = { addRuleTo = group.key }) {
                             Icon(Icons.Default.Add, contentDescription = null, Modifier.size(18.dp))
                             Text("  Add rule")
+                        }
+                        if (group.rules.isNotEmpty()) {
+                            TextButton(onClick = { onGroups { gs -> gs.withGroupDuplicated(group.key) } }) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = null, Modifier.size(16.dp))
+                                Text("  Duplicate")
+                            }
                         }
                         TextButton(onClick = { onGroups { gs -> gs.filterNot { it.key == group.key } } }) {
                             Text("Remove group", color = MaterialTheme.colorScheme.error)
@@ -99,7 +129,11 @@ fun RuleGroupsEditor(
             selected = null,
             onPick = { name ->
                 addRuleTo = null
-                catalog.field(name)?.let { f -> onGroups { gs -> gs.map { g -> if (g.key == groupKey) g.copy(rules = g.rules + newRule(f)) else g } } }
+                catalog.field(name)?.let { f ->
+                    val rule = newRule(f)
+                    opened = opened + rule.key
+                    onGroups { gs -> gs.map { g -> if (g.key == groupKey) g.copy(rules = g.rules + rule) else g } }
+                }
             },
             onDismiss = {
                 // A group created just now stays empty if nothing was picked: drop it.

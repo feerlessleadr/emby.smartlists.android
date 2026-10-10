@@ -158,11 +158,108 @@ class ApiClient(
         }
     }
 
-    /** Ids of lists that are refreshing or queued right now (best effort; empty when the shape is unfamiliar). */
-    suspend fun ongoingListIds(): Set<String> {
-        val ongoing = AppJson.parseToJsonElement(get("$pluginBase/Status/Ongoing"))
-        val array = (ongoing as? kotlinx.serialization.json.JsonArray) ?: return emptySet()
-        return array.mapNotNull { (it as? JsonObject)?.get("listId")?.let { v -> (v as? JsonPrimitive)?.contentOrNull } }.toSet()
+    /** Refreshes in progress and how each list's last refresh went. Best effort: an unfamiliar shape gives empty maps. */
+    suspend fun refreshStatus(): RefreshStatus {
+        val root = AppJson.parseToJsonElement(get("$pluginBase/Status")) as? JsonObject ?: return RefreshStatus.Empty
+        fun text(o: JsonObject, key: String) = (o[key] as? JsonPrimitive)?.takeIf { it !is kotlinx.serialization.json.JsonNull }?.contentOrNull
+        val running = (root["ongoingOperations"] as? kotlinx.serialization.json.JsonArray).orEmpty().mapNotNull { e ->
+            val o = e as? JsonObject ?: return@mapNotNull null
+            val id = text(o, "listId") ?: return@mapNotNull null
+            id to RunningRefresh(o.intOrNullAt("processedItems") ?: 0, o.intOrNullAt("totalItems") ?: 0)
+        }.toMap()
+        // The history is ordered by recency: the newest entry of a list is the one that counts.
+        val last = LinkedHashMap<String, RefreshOutcome>()
+        (root["history"] as? kotlinx.serialization.json.JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+            .sortedByDescending { text(it, "endTime") ?: text(it, "startTime").orEmpty() }
+            .forEach { o ->
+                val id = text(o, "listId") ?: return@forEach
+                if (id !in last) last[id] = RefreshOutcome((o["success"] as? JsonPrimitive)?.contentOrNull != "false", text(o, "errorMessage"), text(o, "endTime"))
+            }
+        return RefreshStatus(running, last)
+    }
+
+    // ----- preview -------------------------------------------------------------------------------------------
+
+    /** What [doc] (a list as it would be saved) would contain right now. Needs plugin 0.1.10 or newer. */
+    suspend fun preview(doc: JsonObject, limit: Int = 25): Preview {
+        val root = AppJson.parseToJsonElement(send("POST", "$pluginBase/preview?limit=$limit", doc.toString())).jsonObject
+        val items = (root["Items"] as? kotlinx.serialization.json.JsonArray).orEmpty().mapNotNull { e ->
+            val o = e as? JsonObject ?: return@mapNotNull null
+            PreviewItem(
+                id = (o["Id"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull() ?: 0L,
+                name = o.stringAt("Name").orEmpty(),
+                type = o.stringAt("Type").orEmpty(),
+                detail = o.stringAt("Detail"),
+            )
+        }
+        return Preview(total = root.intOrNullAt("Total") ?: items.size, items = items)
+    }
+
+    // ----- cover images --------------------------------------------------------------------------------------
+
+    /** The primary image of an Emby item (a list's playlist or collection), scaled by the server; null when it has none. */
+    suspend fun embyCover(itemId: String, maxWidth: Int = 200): ByteArray? = withContext(Dispatchers.IO) {
+        val url = "$server/emby/Items/$itemId/Images/Primary?maxWidth=$maxWidth&quality=80".toHttpUrl()
+        val request = Request.Builder().url(url).header("X-Emby-Token", token ?: throw ApiException(401, "You are signed out.")).get().build()
+        try {
+            http.newCall(request).execute().use { response ->
+                when {
+                    response.code == 404 -> null
+                    !response.isSuccessful -> throw ApiException(response.code, describeError(response.code, ""))
+                    else -> response.body?.bytes()
+                }
+            }
+        } catch (e: ApiException) {
+            throw e
+        } catch (e: IOException) {
+            throw ApiException(0, "Could not reach the server: ${e.message ?: "network error"}.")
+        }
+    }
+
+    // ----- backups -------------------------------------------------------------------------------------------
+
+    suspend fun backups(): List<BackupInfo> {
+        val root = AppJson.parseToJsonElement(get("$pluginBase/backups")) as? JsonObject ?: return emptyList()
+        return (root["backups"] as? kotlinx.serialization.json.JsonArray).orEmpty().mapNotNull { e ->
+            val o = e as? JsonObject ?: return@mapNotNull null
+            BackupInfo(
+                filename = (o["filename"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null,
+                createdAt = (o["createdAt"] as? JsonPrimitive)?.contentOrNull,
+                sizeBytes = (o["sizeBytes"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull() ?: 0L,
+                listCount = o.intOrNullAt("listCount") ?: 0,
+            )
+        }.sortedByDescending { it.createdAt.orEmpty() }
+    }
+
+    suspend fun createBackup(): String {
+        val root = AppJson.parseToJsonElement(send("POST", "$pluginBase/backups", "")) as? JsonObject
+        return (root?.get("message") as? JsonPrimitive)?.contentOrNull ?: "Backup created."
+    }
+
+    suspend fun deleteBackup(filename: String) {
+        send("DELETE", "$pluginBase/backups/${java.net.URLEncoder.encode(filename, "UTF-8")}", null)
+    }
+
+    /** Restores the lists of a backup. [overwrite] replaces lists that already exist (same id); otherwise they are skipped. */
+    suspend fun restoreBackup(filename: String, overwrite: Boolean): RestoreResult {
+        val root = AppJson.parseToJsonElement(send("POST", "$pluginBase/backups/${java.net.URLEncoder.encode(filename, "UTF-8")}/restore?overwrite=$overwrite", "")).jsonObject
+        return RestoreResult(root.intOrNullAt("restored") ?: 0, root.intOrNullAt("overwritten") ?: 0, root.intOrNullAt("skipped") ?: 0, root.intOrNullAt("errors") ?: 0)
+    }
+
+    /** The backup file itself (a zip), to save on the phone. */
+    suspend fun downloadBackup(filename: String): ByteArray = withContext(Dispatchers.IO) {
+        val url = "$pluginBase/backups/${java.net.URLEncoder.encode(filename, "UTF-8")}".toHttpUrl()
+        val request = Request.Builder().url(url).header("X-Emby-Token", token ?: throw ApiException(401, "You are signed out.")).get().build()
+        try {
+            http.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) throw ApiException(response.code, describeError(response.code, ""))
+                response.body?.bytes() ?: ByteArray(0)
+            }
+        } catch (e: ApiException) {
+            throw e
+        } catch (e: IOException) {
+            throw ApiException(0, "Could not reach the server: ${e.message ?: "network error"}.")
+        }
     }
 
     // ----- plumbing ------------------------------------------------------------------------------------------

@@ -6,6 +6,7 @@ import android.os.Build
 import com.feerlessleadr.embysmartlists.data.ApiClient
 import com.feerlessleadr.embysmartlists.data.ApiException
 import com.feerlessleadr.embysmartlists.data.AppSettings
+import com.feerlessleadr.embysmartlists.data.CoverCache
 import com.feerlessleadr.embysmartlists.data.KeystoreSecureStore
 import com.feerlessleadr.embysmartlists.data.SUPPORTED_API_VERSION
 import com.feerlessleadr.embysmartlists.data.Session
@@ -31,6 +32,7 @@ class App : Application() {
 class AppContainer(context: Context) {
     val sessions = SessionRepository(KeystoreSecureStore(context))
     val settings = AppSettings(context.getSharedPreferences("settings", Context.MODE_PRIVATE))
+    val covers = CoverCache()
 
     private val _listsChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
@@ -92,6 +94,7 @@ class AppContainer(context: Context) {
     }
 
     fun signOut() {
+        covers.clear()
         sessions.signOut()
         _session.value = null
     }

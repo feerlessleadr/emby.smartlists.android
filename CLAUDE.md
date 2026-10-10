@@ -4,6 +4,8 @@ Native Android app (Kotlin, Jetpack Compose, Material 3, OkHttp, kotlinx.seriali
 
 ## Decisions (do not relitigate without new evidence)
 
+The full, dated log of what was decided and why is `docs/decisions.md`: read it first and add to it whenever a decision is made, however small (the owner asked for this explicitly). The short list below is the foundation.
+
 - **HTTPS only in release builds**, system CAs only, no cleartext (network security config; the debug source set allows cleartext to a local test server). `UrlRules.normalize` enforces it in the sign-in form.
 - **Token only in the `X-Emby-Token` header**, stored encrypted with an Android Keystore AES-GCM key (`KeystoreSecureStore`). The password is never stored.
 - **Lists are kept as `JsonObject`** (`SmartListDoc`) and edited in place so unknown or future plugin properties survive a PUT.

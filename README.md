@@ -11,20 +11,22 @@ An Android app for managing the [SmartLists plugin](https://github.com/feerlessl
 
 ## Status
 
-Early version (0.3.x). What works today:
+Early version (0.4.x). What works today:
 
 - Sign in (Emby administrator account), with a check that the SmartLists plugin is installed and speaks a compatible API version.
 - See all your smart lists (playlists and collections), how many items they hold and when they were last refreshed, and read their rules, sorting, limits and auto-refresh in plain words.
 - Refresh a list or all lists, enable or disable a list, delete a list (optionally with its Emby playlist/collection).
 - **Create and edit lists:** start from a template (Next Up, Continue Watching) or blank; choose playlist or collection, media types, rules (groups of rules, with inputs that fit each field: libraries as tick boxes, dates, relative dates, yes/no, fixed choices), up to three sorts (including the round-robin sorts), limits and auto-refresh. The rule fields, conditions and sorts come from your server's plugin, so they always match it.
 - **Everything else the web page's list form offers:** playlists for several users or for every user (and public); refresh schedules and show/hide schedules; sort title, description, tags and favorite on the Emby list; custom images (from the phone's photo picker, existing lists); bumpers; advanced options (extras, match by items, group into collections, pick one group at random, "similar to" comparison); and per-rule options (check for a specific user, include items with no date, runtime unit, only the default audio track, look at the parent series/album, collection search depth). Collections can change whose watch state they use.
-- **Settings:** choose a light or dark theme, or follow the phone's setting; see who you are signed in as and sign out.
+- **Everyday comfort:** rules fold to one readable sentence; copy a rule, a rule group or a whole list; a prompt before leaving unsaved changes; section shortcuts above the form; **preview what a list would contain** before saving (needs plugin 0.1.10); delete with a few seconds to **undo**; search and filter chips (type, disabled, failed); progress and failure of refreshes on the cards; cover art; compact or comfortable cards; a colour mark per list.
+- **Share and import** a list as text; **backups** (back up now, restore, save a copy, delete); a **home-screen widget** and a **quick-settings tile** that refresh all lists.
+- **Settings:** light, dark or follow the phone; an accent colour (eight swatches, or your wallpaper colours on Android 12+); card density; backups; see who you are signed in as and sign out.
 
 Not in the app: external lists and the end-user (non-administrator) page, which the plugin does not offer on Emby either. Settings the app does not know about are kept as they are when you save.
 
 ## Requirements
 
-- Emby Server 4.10.1 or newer with the **SmartLists plugin 0.1.9 or newer** ([releases](https://github.com/feerlessleadr/emby.smartlists/releases)).
+- Emby Server 4.10.1 or newer with the **SmartLists plugin 0.1.9 or newer** ([releases](https://github.com/feerlessleadr/emby.smartlists/releases)); 0.1.10 or newer for the preview.
 - An Emby **administrator** account.
 - A server address that uses **HTTPS** with a certificate your phone trusts (for example Let's Encrypt). The app refuses plain `http://` addresses and does not trust user-installed certificates.
 - Android 8.0 (API 26) or newer.
