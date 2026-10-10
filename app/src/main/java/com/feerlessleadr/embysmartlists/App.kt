@@ -1,0 +1,85 @@
+package com.feerlessleadr.embysmartlists
+
+import android.app.Application
+import android.content.Context
+import android.os.Build
+import com.feerlessleadr.embysmartlists.data.ApiClient
+import com.feerlessleadr.embysmartlists.data.ApiException
+import com.feerlessleadr.embysmartlists.data.KeystoreSecureStore
+import com.feerlessleadr.embysmartlists.data.SUPPORTED_API_VERSION
+import com.feerlessleadr.embysmartlists.data.Session
+import com.feerlessleadr.embysmartlists.data.SessionRepository
+import com.feerlessleadr.embysmartlists.data.UrlRules
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+class App : Application() {
+    lateinit var container: AppContainer
+        private set
+
+    override fun onCreate() {
+        super.onCreate()
+        container = AppContainer(this)
+    }
+}
+
+/** Hand-built dependencies: the session, and an API client for it. */
+class AppContainer(context: Context) {
+    val sessions = SessionRepository(KeystoreSecureStore(context))
+    private val http = ApiClient.defaultHttpClient()
+
+    private val _session = MutableStateFlow(sessions.load())
+    val session: StateFlow<Session?> = _session.asStateFlow()
+
+    /** An API client for the current session, or null when signed out. */
+    fun api(): ApiClient? = _session.value?.let { apiFor(it.serverUrl, it.token) }
+
+    private fun apiFor(serverUrl: String, token: String?) = ApiClient(
+        serverUrl = serverUrl,
+        token = token,
+        appVersion = BuildConfig.VERSION_NAME,
+        deviceId = sessions.deviceId(),
+        deviceName = Build.MODEL ?: "Android",
+        http = http,
+    )
+
+    /**
+     * Signs in and stores the session. Fails (with a message fit to show) when the address is not allowed, the
+     * account is not an administrator, or the plugin is missing or speaks a different API version.
+     */
+    suspend fun signIn(serverInput: String, userName: String, password: String) {
+        val server = when (val result = UrlRules.normalize(serverInput, allowCleartext = BuildConfig.DEBUG)) {
+            is UrlRules.Result.Ok -> result.serverUrl
+            is UrlRules.Result.Rejected -> throw ApiException(0, result.reason)
+        }
+        val anonymous = apiFor(server, null)
+        val signedIn = anonymous.signIn(userName.trim(), password)
+        if (!signedIn.isAdministrator) {
+            throw ApiException(403, "${signedIn.userName} is not an Emby administrator. The SmartLists API is for administrators only.")
+        }
+
+        val authed = apiFor(server, signedIn.token)
+        val info = try {
+            authed.info()
+        } catch (e: ApiException) {
+            if (e.status == 404) {
+                throw ApiException(404, "The SmartLists plugin was not found on this server. Install SmartLists 0.1.9 or newer.")
+            }
+            throw e
+        }
+        if (info.apiVersion != SUPPORTED_API_VERSION) {
+            val advice = if (info.apiVersion > SUPPORTED_API_VERSION) "Update the app." else "Update the SmartLists plugin."
+            throw ApiException(0, "This app speaks API version $SUPPORTED_API_VERSION but the plugin speaks ${info.apiVersion}. $advice")
+        }
+
+        val session = Session(server, signedIn.token, signedIn.userId, signedIn.userName)
+        sessions.save(session)
+        _session.value = session
+    }
+
+    fun signOut() {
+        sessions.signOut()
+        _session.value = null
+    }
+}
