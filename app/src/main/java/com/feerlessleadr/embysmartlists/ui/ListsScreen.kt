@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
@@ -32,6 +34,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -60,7 +63,7 @@ import com.feerlessleadr.embysmartlists.data.SmartListDoc
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ListsScreen(vm: ListsViewModel) {
+fun ListsScreen(vm: ListsViewModel, onNew: () -> Unit, onEdit: (String) -> Unit, onSettings: () -> Unit) {
     val state by vm.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     var confirmDelete by remember { mutableStateOf<SmartListDoc?>(null) }
@@ -77,10 +80,17 @@ fun ListsScreen(vm: ListsViewModel) {
                     IconButton(onClick = vm::refreshAll, enabled = state.lists.isNotEmpty()) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh all lists")
                     }
-                    IconButton(onClick = vm::signOut) {
-                        Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "Sign out")
+                    IconButton(onClick = onSettings) {
+                        Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }
                 },
+            )
+        },
+        floatingActionButton = {
+            ExtendedFloatingActionButton(
+                onClick = onNew,
+                icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                text = { Text("New list") },
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },
@@ -92,14 +102,14 @@ fun ListsScreen(vm: ListsViewModel) {
                 else -> PullToRefreshBox(isRefreshing = state.refreshing, onRefresh = vm::reload, modifier = Modifier.fillMaxSize()) {
                     if (state.lists.isEmpty()) {
                         Text(
-                            "No smart lists yet. Create one in the Emby SmartLists page, or wait for the editor in this app.",
+                            "No smart lists yet. Tap \"New list\" to create one.",
                             modifier = Modifier.align(Alignment.Center).padding(32.dp),
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     } else {
                         LazyColumn(
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
                             items(state.lists, key = { it.id }) { doc ->
@@ -107,6 +117,7 @@ fun ListsScreen(vm: ListsViewModel) {
                                     doc = doc,
                                     catalog = state.catalog,
                                     busy = doc.id in state.busyIds,
+                                    onEdit = { onEdit(doc.id) },
                                     onRefresh = { vm.refreshList(doc) },
                                     onToggleEnabled = { vm.setEnabled(doc, !doc.enabled) },
                                     onDelete = { confirmDelete = doc },
@@ -144,6 +155,7 @@ private fun ListCard(
     doc: SmartListDoc,
     catalog: Catalog?,
     busy: Boolean,
+    onEdit: () -> Unit,
     onRefresh: () -> Unit,
     onToggleEnabled: () -> Unit,
     onDelete: () -> Unit,
@@ -178,6 +190,12 @@ private fun ListCard(
                 Box {
                     IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, contentDescription = "More actions") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Edit") },
+                            leadingIcon = { Icon(Icons.Default.Edit, null) },
+                            enabled = !busy,
+                            onClick = { menu = false; onEdit() },
+                        )
                         DropdownMenuItem(
                             text = { Text("Refresh now") },
                             leadingIcon = { Icon(Icons.Default.Refresh, null) },

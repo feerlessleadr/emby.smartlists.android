@@ -6,6 +6,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import com.feerlessleadr.embysmartlists.data.ThemeMode
 
 private val LightColors = lightColorScheme(
     primary = Color(0xFF1E7B34),
@@ -53,11 +54,19 @@ private val DarkColors = darkColorScheme(
     error = Color(0xFFFFB4AB),
 )
 
+/** True when the app should draw dark for [mode] (the phone's own setting decides for [ThemeMode.System]). */
+@Composable
+fun useDarkTheme(mode: ThemeMode): Boolean = when (mode) {
+    ThemeMode.System -> isSystemInDarkTheme()
+    ThemeMode.Light -> false
+    ThemeMode.Dark -> true
+}
+
 /** The app's own green scheme (Emby green with a pink accent), light and dark; it does not follow the wallpaper. */
 @Composable
-fun EmbySmartListsTheme(content: @Composable () -> Unit) {
+fun EmbySmartListsTheme(mode: ThemeMode = ThemeMode.System, content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors,
+        colorScheme = if (useDarkTheme(mode)) DarkColors else LightColors,
         content = content,
     )
 }

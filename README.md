@@ -5,17 +5,21 @@ An Android app for managing the [SmartLists plugin](https://github.com/feerlessl
 <p>
   <img src="docs/images/sign-in.png" width="240" alt="Sign-in screen">
   <img src="docs/images/lists.png" width="240" alt="Smart lists with their rules">
+  <img src="docs/images/editor.png" width="240" alt="The list editor">
+  <img src="docs/images/lists-dark.png" width="240" alt="Dark theme">
 </p>
 
 ## Status
 
-Early version (0.1.x). What works today:
+Early version (0.2.x). What works today:
 
 - Sign in (Emby administrator account), with a check that the SmartLists plugin is installed and speaks a compatible API version.
 - See all your smart lists (playlists and collections), how many items they hold and when they were last refreshed, and read their rules, sorting, limits and auto-refresh in plain words.
 - Refresh a list or all lists, enable or disable a list, delete a list (optionally with its Emby playlist/collection).
+- **Create and edit lists:** start from a template (Next Up, Continue Watching) or blank; choose playlist or collection, media types, rules (groups of rules, with inputs that fit each field: libraries as tick boxes, dates, relative dates, yes/no, fixed choices), up to three sorts (including the round-robin sorts), limits and auto-refresh. The rule fields, conditions and sorts come from your server's plugin, so they always match it.
+- **Settings:** choose a light or dark theme, or follow the phone's setting; see who you are signed in as and sign out.
 
-Coming next: creating and editing lists (rule builder, sorting, limits) in the app.
+Not in the app yet: the per-list extras the web page has (custom images, sort title, tags, schedules, several users per playlist, bumpers) are left untouched when you edit a list, but cannot be changed here.
 
 ## Requirements
 

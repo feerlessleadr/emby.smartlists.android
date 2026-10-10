@@ -5,12 +5,15 @@ import android.content.Context
 import android.os.Build
 import com.feerlessleadr.embysmartlists.data.ApiClient
 import com.feerlessleadr.embysmartlists.data.ApiException
+import com.feerlessleadr.embysmartlists.data.AppSettings
 import com.feerlessleadr.embysmartlists.data.KeystoreSecureStore
 import com.feerlessleadr.embysmartlists.data.SUPPORTED_API_VERSION
 import com.feerlessleadr.embysmartlists.data.Session
 import com.feerlessleadr.embysmartlists.data.SessionRepository
 import com.feerlessleadr.embysmartlists.data.UrlRules
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -27,6 +30,16 @@ class App : Application() {
 /** Hand-built dependencies: the session, and an API client for it. */
 class AppContainer(context: Context) {
     val sessions = SessionRepository(KeystoreSecureStore(context))
+    val settings = AppSettings(context.getSharedPreferences("settings", Context.MODE_PRIVATE))
+
+    private val _listsChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    /** Emits when a list was created or changed in the editor, so the overview reloads. */
+    val listsChanged: SharedFlow<Unit> = _listsChanged
+
+    fun notifyListsChanged() {
+        _listsChanged.tryEmit(Unit)
+    }
     private val http = ApiClient.defaultHttpClient()
 
     private val _session = MutableStateFlow(sessions.load())

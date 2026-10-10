@@ -1,28 +1,44 @@
 package com.feerlessleadr.embysmartlists
 
+import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
 import com.feerlessleadr.embysmartlists.ui.EmbySmartListsTheme
 import com.feerlessleadr.embysmartlists.ui.ListsScreen
 import com.feerlessleadr.embysmartlists.ui.ListsViewModel
+import com.feerlessleadr.embysmartlists.ui.SettingsScreen
 import com.feerlessleadr.embysmartlists.ui.SignInScreen
 import com.feerlessleadr.embysmartlists.ui.SignInViewModel
+import com.feerlessleadr.embysmartlists.ui.editor.EditorScreen
+import com.feerlessleadr.embysmartlists.ui.editor.EditorViewModel
+import com.feerlessleadr.embysmartlists.ui.useDarkTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
         val container = (application as App).container
         setContent {
-            EmbySmartListsTheme {
+            val mode by container.settings.themeMode.collectAsStateWithLifecycle()
+            val dark = useDarkTheme(mode)
+            // Keep the status and navigation bar icons readable when the chosen theme differs from the phone's.
+            LaunchedEffect(dark) {
+                val style = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark }
+                enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+            }
+            EmbySmartListsTheme(mode) {
                 Root(container)
             }
         }
@@ -36,9 +52,32 @@ private fun Root(container: AppContainer) {
         val vm: SignInViewModel = viewModel(factory = viewModelFactory { initializer { SignInViewModel(container) } })
         SignInScreen(vm)
     } else {
-        // A new view model per signed-in session, so signing in as someone else never shows the previous lists.
-        val key = session?.token.orEmpty()
-        val vm: ListsViewModel = viewModel(key = "lists-$key", factory = viewModelFactory { initializer { ListsViewModel(container) } })
-        ListsScreen(vm)
+        SignedIn(container, session?.token.orEmpty())
+    }
+}
+
+@Composable
+private fun SignedIn(container: AppContainer, token: String) {
+    // A new set of view models per signed-in session, so signing in as someone else never shows the previous lists.
+    val nav = rememberNavController()
+    val listsVm: ListsViewModel = viewModel(key = "lists-$token", factory = viewModelFactory { initializer { ListsViewModel(container) } })
+
+    NavHost(navController = nav, startDestination = "lists") {
+        composable("lists") {
+            ListsScreen(
+                vm = listsVm,
+                onNew = { nav.navigate("editor/new") },
+                onEdit = { id -> nav.navigate("editor/$id") },
+                onSettings = { nav.navigate("settings") },
+            )
+        }
+        composable("editor/{id}") { entry ->
+            val id = entry.arguments?.getString("id")?.takeIf { it != "new" }
+            val vm: EditorViewModel = viewModel(key = "editor-$token-${id ?: "new"}", factory = viewModelFactory { initializer { EditorViewModel(container, id) } })
+            EditorScreen(vm, onClose = { nav.popBackStack() })
+        }
+        composable("settings") {
+            SettingsScreen(container, onBack = { nav.popBackStack() })
+        }
     }
 }

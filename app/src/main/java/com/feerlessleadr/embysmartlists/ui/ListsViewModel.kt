@@ -38,6 +38,13 @@ class ListsViewModel(private val container: AppContainer) : ViewModel() {
 
     init {
         load(initial = true)
+        // The editor saved a list: show the change (and again shortly, once the server's first refresh has run).
+        viewModelScope.launch {
+            container.listsChanged.collect {
+                load(initial = false)
+                reloadSoon()
+            }
+        }
     }
 
     fun reload() = load(initial = false)
