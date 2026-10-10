@@ -495,6 +495,8 @@ data class ListDraft(
          * [asCopy] and by [toJson] (the original is not kept).
          */
         fun fromShared(text: String, ownerId: String?): ListDraft? {
+            // Refuse before parsing: the parser is recursive, so deeply nested text would overflow its stack.
+            if (text.length > Safety.MAX_IMPORT_BYTES || Safety.jsonTooDeep(text)) return null
             val json = try {
                 AppJson.parseToJsonElement(text) as? JsonObject
             } catch (e: Exception) {

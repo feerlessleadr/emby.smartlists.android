@@ -71,6 +71,15 @@ android {
     }
 }
 
+// A release build signed with the debug key must never be published, so building one needs an explicit opt-in:
+// the release workflow has the real key (SIGNING_KEYSTORE_PATH); anything else needs -PallowDebugSigning.
+gradle.taskGraph.whenReady {
+    val buildsRelease = allTasks.any { it.path.startsWith(":app:") && (it.name.contains("Release") && (it.name.startsWith("assemble") || it.name.startsWith("bundle") || it.name.startsWith("package"))) }
+    if (buildsRelease && System.getenv("SIGNING_KEYSTORE_PATH") == null && findProperty("allowDebugSigning") == null) {
+        throw GradleException("A release build needs the release signing key (SIGNING_KEYSTORE_PATH). For a local test build that must not be published, pass -PallowDebugSigning.")
+    }
+}
+
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)

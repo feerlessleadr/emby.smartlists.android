@@ -1,7 +1,6 @@
 package com.feerlessleadr.embysmartlists.ui.editor
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.feerlessleadr.embysmartlists.AppContainer
@@ -11,6 +10,7 @@ import com.feerlessleadr.embysmartlists.data.EmbyUser
 import com.feerlessleadr.embysmartlists.data.ImageInfo
 import com.feerlessleadr.embysmartlists.data.ListDraft
 import com.feerlessleadr.embysmartlists.data.Preview
+import com.feerlessleadr.embysmartlists.data.Safety
 import com.feerlessleadr.embysmartlists.data.Swatch
 import com.feerlessleadr.embysmartlists.data.Templates
 import com.feerlessleadr.embysmartlists.data.ValueOption
@@ -195,7 +195,7 @@ class EditorViewModel(private val container: AppContainer, private val listId: S
                 _state.update { it.copy(images = images) }
                 images.forEach { image ->
                     launch {
-                        val bitmap = runCatching { decodePreview(api.imageBytes(id, image.type)) }.getOrNull()
+                        val bitmap = runCatching { Safety.decodeBounded(api.imageBytes(id, image.type), 600) }.getOrNull()
                         if (bitmap != null) _state.update { it.copy(previews = it.previews + (image.type to bitmap)) }
                     }
                 }
@@ -242,14 +242,5 @@ class EditorViewModel(private val container: AppContainer, private val listId: S
 
     fun imageProblem(message: String) {
         _state.update { it.copy(imageMessage = message) }
-    }
-
-    /** A small version of the image: previews only need to be recognisable. */
-    private fun decodePreview(bytes: ByteArray): Bitmap? {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-        var sample = 1
-        while (bounds.outWidth / sample > 600 || bounds.outHeight / sample > 600) sample *= 2
-        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
     }
 }

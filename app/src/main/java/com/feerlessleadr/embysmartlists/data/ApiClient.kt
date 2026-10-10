@@ -74,32 +74,37 @@ class ApiClient(
 
     suspend fun lists(): List<SmartListDoc> = SmartListDoc.parseArray(get("$pluginBase/"))
 
-    suspend fun list(id: String): SmartListDoc = SmartListDoc.parse(get("$pluginBase/$id"))
+    suspend fun list(id: String): SmartListDoc = SmartListDoc.parse(get("$pluginBase/${seg(id)}"))
 
     suspend fun create(doc: JsonObject, skipRefresh: Boolean = false): SmartListDoc =
         SmartListDoc.parse(send("POST", "$pluginBase/?skipRefresh=$skipRefresh", doc.toString()))
 
     suspend fun update(id: String, doc: JsonObject, skipRefresh: Boolean = false): SmartListDoc =
-        SmartListDoc.parse(send("PUT", "$pluginBase/$id?skipRefresh=$skipRefresh", doc.toString()))
+        SmartListDoc.parse(send("PUT", "$pluginBase/${seg(id)}?skipRefresh=$skipRefresh", doc.toString()))
 
     suspend fun delete(id: String, deleteEmbyList: Boolean) {
-        send("DELETE", "$pluginBase/$id?deleteEmbyList=$deleteEmbyList", null)
+        send("DELETE", "$pluginBase/${seg(id)}?deleteEmbyList=$deleteEmbyList", null)
     }
 
     suspend fun enable(id: String) {
-        send("POST", "$pluginBase/$id/enable", "")
+        send("POST", "$pluginBase/${seg(id)}/enable", "")
     }
 
     suspend fun disable(id: String) {
-        send("POST", "$pluginBase/$id/disable", "")
+        send("POST", "$pluginBase/${seg(id)}/disable", "")
     }
 
     suspend fun refresh(id: String) {
-        send("POST", "$pluginBase/$id/refresh", "")
+        send("POST", "$pluginBase/${seg(id)}/refresh", "")
     }
 
     suspend fun refreshAll() {
         send("POST", "$pluginBase/refresh", "")
+    }
+
+    // Ends this session on the server, so the token stops working there. Best effort: the caller ignores failure.
+    suspend fun logout() {
+        send("POST", "$server/emby/Sessions/Logout", "")
     }
 
     suspend fun users(): List<EmbyUser> =
@@ -127,7 +132,7 @@ class ApiClient(
     // ----- custom images -------------------------------------------------------------------------------------
 
     suspend fun images(id: String): List<ImageInfo> =
-        AppJson.parseToJsonElement(get("$pluginBase/$id/images")).jsonArray.mapNotNull { ImageInfo.from(it as? JsonObject ?: return@mapNotNull null) }
+        AppJson.parseToJsonElement(get("$pluginBase/${seg(id)}/images")).jsonArray.mapNotNull { ImageInfo.from(it as? JsonObject ?: return@mapNotNull null) }
 
     suspend fun uploadImage(id: String, imageType: String, fileName: String, mimeType: String, bytes: ByteArray): ImageInfo {
         val body = okhttp3.MultipartBody.Builder()
@@ -135,21 +140,21 @@ class ApiClient(
             .addFormDataPart("imageType", imageType)
             .addFormDataPart("file", fileName, bytes.toRequestBody(mimeType.toMediaType()))
             .build()
-        val text = execute(Request.Builder().url("$pluginBase/$id/images".toHttpUrl()).post(body))
+        val text = execute(Request.Builder().url("$pluginBase/${seg(id)}/images".toHttpUrl()).post(body))
         return ImageInfo.from(AppJson.parseToJsonElement(text).jsonObject)
     }
 
     suspend fun deleteImage(id: String, imageType: String) {
-        send("DELETE", "$pluginBase/$id/images/$imageType", null)
+        send("DELETE", "$pluginBase/${seg(id)}/images/${seg(imageType)}", null)
     }
 
     /** The image file itself (the plugin serves it only to a signed-in administrator, so it needs the token header). */
     suspend fun imageBytes(id: String, imageType: String): ByteArray = withContext(Dispatchers.IO) {
-        val request = Request.Builder().url("$pluginBase/$id/images/$imageType/file".toHttpUrl()).header("X-Emby-Token", token ?: throw ApiException(401, "You are signed out.")).get().build()
+        val request = Request.Builder().url("$pluginBase/${seg(id)}/images/${seg(imageType)}/file".toHttpUrl()).header("X-Emby-Token", token ?: throw ApiException(401, "You are signed out.")).get().build()
         try {
             http.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) throw ApiException(response.code, describeError(response.code, ""))
-                response.body?.bytes() ?: ByteArray(0)
+                readLimited(response, Safety.MAX_IMAGE_BYTES) ?: ByteArray(0)
             }
         } catch (e: ApiException) {
             throw e
@@ -199,14 +204,14 @@ class ApiClient(
 
     /** The primary image of an Emby item (a list's playlist or collection), scaled by the server; null when it has none. */
     suspend fun embyCover(itemId: String, maxWidth: Int = 200): ByteArray? = withContext(Dispatchers.IO) {
-        val url = "$server/emby/Items/$itemId/Images/Primary?maxWidth=$maxWidth&quality=80".toHttpUrl()
+        val url = "$server/emby/Items/${seg(itemId)}/Images/Primary?maxWidth=$maxWidth&quality=80".toHttpUrl()
         val request = Request.Builder().url(url).header("X-Emby-Token", token ?: throw ApiException(401, "You are signed out.")).get().build()
         try {
             http.newCall(request).execute().use { response ->
                 when {
                     response.code == 404 -> null
                     !response.isSuccessful -> throw ApiException(response.code, describeError(response.code, ""))
-                    else -> response.body?.bytes()
+                    else -> readLimited(response, Safety.MAX_COVER_BYTES)
                 }
             }
         } catch (e: ApiException) {
@@ -237,29 +242,49 @@ class ApiClient(
     }
 
     suspend fun deleteBackup(filename: String) {
-        send("DELETE", "$pluginBase/backups/${java.net.URLEncoder.encode(filename, "UTF-8")}", null)
+        send("DELETE", "$pluginBase/backups/${seg(filename)}", null)
     }
 
     /** Restores the lists of a backup. [overwrite] replaces lists that already exist (same id); otherwise they are skipped. */
     suspend fun restoreBackup(filename: String, overwrite: Boolean): RestoreResult {
-        val root = AppJson.parseToJsonElement(send("POST", "$pluginBase/backups/${java.net.URLEncoder.encode(filename, "UTF-8")}/restore?overwrite=$overwrite", "")).jsonObject
+        val root = AppJson.parseToJsonElement(send("POST", "$pluginBase/backups/${seg(filename)}/restore?overwrite=$overwrite", "")).jsonObject
         return RestoreResult(root.intOrNullAt("restored") ?: 0, root.intOrNullAt("overwritten") ?: 0, root.intOrNullAt("skipped") ?: 0, root.intOrNullAt("errors") ?: 0)
     }
 
-    /** The backup file itself (a zip), to save on the phone. */
-    suspend fun downloadBackup(filename: String): ByteArray = withContext(Dispatchers.IO) {
-        val url = "$pluginBase/backups/${java.net.URLEncoder.encode(filename, "UTF-8")}".toHttpUrl()
+    // The backup file (a zip) copied straight into the given stream, so a large backup never sits in memory.
+    suspend fun downloadBackupTo(filename: String, out: java.io.OutputStream) = withContext(Dispatchers.IO) {
+        val url = "$pluginBase/backups/${seg(filename)}".toHttpUrl()
         val request = Request.Builder().url(url).header("X-Emby-Token", token ?: throw ApiException(401, "You are signed out.")).get().build()
         try {
             http.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) throw ApiException(response.code, describeError(response.code, ""))
-                response.body?.bytes() ?: ByteArray(0)
+                response.body?.byteStream()?.use { it.copyTo(out) }
             }
         } catch (e: ApiException) {
             throw e
         } catch (e: IOException) {
             throw ApiException(0, "Could not reach the server: ${e.message ?: "network error"}.")
         }
+    }
+
+    // The response body, refusing more than limit bytes (a hostile or broken server cannot make the app hold more).
+    private fun readLimited(response: okhttp3.Response, limit: Long): ByteArray? {
+        val body = response.body ?: return null
+        val declared = body.contentLength()
+        if (declared > limit) throw ApiException(0, "The server sent a larger picture than expected, so it was ignored.")
+        val source = body.source()
+        source.request(limit + 1)
+        if (source.buffer.size > limit) throw ApiException(0, "The server sent a larger picture than expected, so it was ignored.")
+        return source.readByteArray()
+    }
+
+    // A value taken from the server and put into a URL path: only letters, digits, dash, dot and underscore, and not
+    // "." or "..", so it cannot add path segments, a query or a fragment.
+    private fun seg(value: String): String {
+        if (value.isEmpty() || value == "." || value == ".." || !SEGMENT.matches(value)) {
+            throw ApiException(0, "The server sent an unexpected identifier, so the request was not made.")
+        }
+        return value
     }
 
     // ----- plumbing ------------------------------------------------------------------------------------------
@@ -304,11 +329,16 @@ class ApiClient(
 
     companion object {
         private val JSON = "application/json; charset=utf-8".toMediaType()
+        private val SEGMENT = Regex("[A-Za-z0-9._-]+")
 
         fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
+            // The Emby API never redirects. Following one would re-send the X-Emby-Token header (OkHttp only strips
+            // the standard Authorization header) to whatever host the redirect names, so a redirect is an error.
+            .followRedirects(false)
+            .followSslRedirects(false)
             .build()
 
         /** Turns an error response into a sentence for a person. The plugin sends {title,status,detail}. */
@@ -320,6 +350,7 @@ class ApiClient(
             }
             return when {
                 !detail.isNullOrBlank() -> detail
+                status in 300..399 -> "The server redirected the request (HTTP $status). The app does not follow redirects; check the server address."
                 status == 401 -> "Your session has expired. Sign in again."
                 status == 403 -> "This account is not an Emby administrator."
                 status == 404 -> "Not found. Is the SmartLists plugin installed and up to date?"

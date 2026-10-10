@@ -30,6 +30,12 @@ class KeystoreSecureStore(context: Context) : SecureStore {
 
     override fun clear() {
         prefs.edit().clear().apply()
+        // The key goes too: nothing it protected is kept, and a new key is made at the next sign-in.
+        try {
+            KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(KEY_ALIAS)
+        } catch (e: Exception) {
+            // Nothing to delete, or the Keystore is unavailable: the encrypted token is already gone from the preferences.
+        }
     }
 
     override fun putSecret(name: String, value: String) {

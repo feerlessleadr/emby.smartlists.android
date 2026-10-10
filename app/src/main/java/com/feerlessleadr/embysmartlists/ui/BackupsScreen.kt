@@ -116,14 +116,15 @@ class BackupsViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    /** The backup file's bytes, for the screen to write where the person chose. */
-    suspend fun download(backup: BackupInfo): ByteArray? {
-        val api = container.api() ?: return null
+    // Copies the backup file straight into the place the person chose. False when it failed (a message was shown).
+    suspend fun download(backup: BackupInfo, out: java.io.OutputStream): Boolean {
+        val api = container.api() ?: return false
         return try {
-            api.downloadBackup(backup.filename)
+            api.downloadBackupTo(backup.filename, out)
+            true
         } catch (e: ApiException) {
             failed(e) { _messages.tryEmit(it) }
-            null
+            false
         }
     }
 
@@ -177,10 +178,9 @@ fun BackupsScreen(container: AppContainer, onBack: () -> Unit) {
         saving = null
         if (uri != null && backup != null) {
             scope.launch {
-                val bytes = vm.download(backup) ?: return@launch
                 try {
-                    context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
-                    vm.say("Saved ${backup.filename}")
+                    val saved = context.contentResolver.openOutputStream(uri)?.use { vm.download(backup, it) } ?: false
+                    if (saved) vm.say("Saved ${backup.filename}")
                 } catch (e: java.io.IOException) {
                     vm.say("Could not save the file: ${e.message}")
                 }

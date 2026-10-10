@@ -136,7 +136,7 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit, onBackups: () ->
                     Text("  Sign out")
                 }
                 Text(
-                    "Signing out removes the access token from this phone. You can also revoke this device in Emby (Dashboard, Devices).",
+                    "Signing out ends this session on the server and removes the access token from this phone. If the server cannot be reached, you can revoke this device in Emby (Dashboard, Devices).",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

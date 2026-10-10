@@ -99,7 +99,10 @@ jobs:
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: |
           set -o pipefail
-          ./gradlew assembleRelease --no-daemon -PappVersion="${{ steps.version.outputs.version }}" 2>&1 | tee "$RUNNER_TEMP/build.log"
+          # Only a dry run (never a tag) may fall back to the throw-away debug key; the Gradle build refuses otherwise.
+          EXTRA=""
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then EXTRA="-PallowDebugSigning"; fi
+          ./gradlew assembleRelease --no-daemon $EXTRA -PappVersion="${{ steps.version.outputs.version }}" 2>&1 | tee "$RUNNER_TEMP/build.log"
           mkdir -p artifacts
           cp app/build/outputs/apk/release/*.apk "artifacts/Emby-SmartLists-${{ steps.version.outputs.version }}.apk"
           ls -l artifacts

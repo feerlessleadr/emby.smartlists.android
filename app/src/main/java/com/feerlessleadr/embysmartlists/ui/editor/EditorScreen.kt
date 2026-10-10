@@ -86,6 +86,7 @@ import com.feerlessleadr.embysmartlists.data.ListDraft
 import com.feerlessleadr.embysmartlists.data.MEDIA_TYPE_LABELS
 import com.feerlessleadr.embysmartlists.data.RANDOM_GROUP_FIELDS
 import com.feerlessleadr.embysmartlists.data.ScheduleDraft
+import com.feerlessleadr.embysmartlists.data.Safety
 import com.feerlessleadr.embysmartlists.data.SortDraft
 import com.feerlessleadr.embysmartlists.data.Swatch
 import com.feerlessleadr.embysmartlists.ui.SwatchDot
@@ -195,8 +196,8 @@ private fun ImportDialog(onImport: (String) -> String?, onDismiss: () -> Unit) {
     val open = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             try {
-                val read = context.contentResolver.openInputStream(uri)?.use { it.readBytes().take(1_000_000).toByteArray().decodeToString() }
-                if (read != null) text = read
+                val bytes = context.contentResolver.openInputStream(uri)?.use { Safety.readImport(it) }
+                if (bytes != null) text = bytes.decodeToString() else error = "That file is too large to be a shared list."
             } catch (e: java.io.IOException) {
                 error = "Could not read that file."
             }
@@ -229,7 +230,7 @@ private fun ImportDialog(onImport: (String) -> String?, onDismiss: () -> Unit) {
         },
         confirmButton = {
             TextButton(enabled = text.isNotBlank(), onClick = {
-                val problem = onImport(text)
+                val problem = if (text.length > Safety.MAX_IMPORT_BYTES) "That is too large to be a shared list." else onImport(text)
                 if (problem == null) onDismiss() else error = problem
             }) { Text("Import") }
         },

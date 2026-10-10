@@ -12,7 +12,11 @@ import com.feerlessleadr.embysmartlists.data.SUPPORTED_API_VERSION
 import com.feerlessleadr.embysmartlists.data.Session
 import com.feerlessleadr.embysmartlists.data.SessionRepository
 import com.feerlessleadr.embysmartlists.data.UrlRules
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,6 +37,7 @@ class AppContainer(context: Context) {
     val sessions = SessionRepository(KeystoreSecureStore(context))
     val settings = AppSettings(context.getSharedPreferences("settings", Context.MODE_PRIVATE))
     val covers = CoverCache()
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val _listsChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
@@ -93,9 +98,20 @@ class AppContainer(context: Context) {
         _session.value = session
     }
 
+    // Signs out here and, best effort, on the server too, so a copy of the token stops working.
     fun signOut() {
+        val api = api()
         covers.clear()
         sessions.signOut()
         _session.value = null
+        if (api != null) {
+            appScope.launch {
+                try {
+                    api.logout()
+                } catch (e: Exception) {
+                    // Offline, or the token was already invalid: the local sign-out has happened either way.
+                }
+            }
+        }
     }
 }

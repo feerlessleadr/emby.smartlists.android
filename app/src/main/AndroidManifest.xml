@@ -34,6 +34,10 @@
                 android:resource="@xml/refresh_widget_info" />
         </receiver>
 
+        <receiver
+            android:name=".RefreshReceiver"
+            android:exported="false" />
+
         <service
             android:name=".RefreshTileService"
             android:exported="true"

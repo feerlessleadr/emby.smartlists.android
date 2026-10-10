@@ -1,7 +1,6 @@
 package com.feerlessleadr.embysmartlists.data
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.util.LruCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -24,7 +23,7 @@ class CoverCache {
         } catch (e: ApiException) {
             return null // a failed look-up is not remembered: try again next time
         }
-        val bitmap = bytes?.let { withContext(Dispatchers.Default) { BitmapFactory.decodeByteArray(it, 0, it.size) } }
+        val bitmap = bytes?.let { withContext(Dispatchers.Default) { Safety.decodeBounded(it, 400) } }
         if (bitmap == null) {
             missing.add(key)
             return null
