@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.feerlessleadr.embysmartlists.data.Catalog
+import com.feerlessleadr.embysmartlists.data.EmbyUser
 import com.feerlessleadr.embysmartlists.data.FieldInfo
 import com.feerlessleadr.embysmartlists.data.RuleDraft
 import com.feerlessleadr.embysmartlists.data.ValueOption
@@ -82,6 +83,7 @@ fun RuleCard(
     catalog: Catalog,
     fields: List<FieldInfo>,
     libraries: List<ValueOption>,
+    users: List<EmbyUser>,
     onChange: (RuleDraft) -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -120,6 +122,8 @@ fun RuleCard(
             )
 
             RuleValueInput(rule, info, catalog, libraries, onChange)
+
+            RuleExtras(rule, info, users, onChange)
 
             if (rule.field == "NextUnwatched") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -278,5 +282,107 @@ private fun DateField(value: String, onChange: (String) -> Unit) {
             },
             dismissButton = { TextButton(onClick = { open = false }) { Text("Cancel") } },
         ) { DatePicker(state = state) }
+    }
+}
+
+/** Options that only some fields have: which user, unknown dates, units, parent items, collection depth. */
+@Composable
+private fun RuleExtras(rule: RuleDraft, info: FieldInfo, users: List<EmbyUser>, onChange: (RuleDraft) -> Unit) {
+    val name = rule.field
+
+    if (info.userSpecific && users.isNotEmpty()) {
+        val chosen = rule.extraString("UserId")
+        DropdownField(
+            label = "Check this for",
+            selectedText = users.firstOrNull { it.id.equals(chosen, ignoreCase = true) }?.name ?: "The list's user",
+            options = listOf<Pair<String?, String>>(null to "The list's user") + users.map { it.id to it.name },
+            onSelect = { id -> onChange(rule.withExtra("UserId", id?.let { JsonPrimitive(it) })) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+
+    if (name == "ReleaseDate" || name == "LastEpisodeAirDate") {
+        SwitchRow("Include items with no date", "Off: items without this date never match", rule.extraBool("IncludeUnknownDates") == true) { on ->
+            onChange(rule.withExtra("IncludeUnknownDates", if (on) JsonPrimitive(true) else null))
+        }
+    }
+
+    if (name == "RuntimeMinutes") {
+        DropdownField(
+            label = "Runtime unit",
+            selectedText = if (rule.extraString("RuntimeUnit").equals("seconds", ignoreCase = true)) "Seconds" else "Minutes",
+            options = listOf("minutes" to "Minutes", "seconds" to "Seconds"),
+            onSelect = { unit -> onChange(rule.withExtra("RuntimeUnit", if (unit == "seconds") JsonPrimitive("seconds") else null)) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+
+    if (name == "AudioLanguages") {
+        SwitchRow("Only the default audio track", "Off: any audio track counts", rule.extraBool("OnlyDefaultAudioLanguage") == true) { on ->
+            onChange(rule.withExtra("OnlyDefaultAudioLanguage", if (on) JsonPrimitive(true) else null))
+        }
+    }
+
+    // Tags, studios, genres and favorite can look at the item, the item and its parent (series or album), or only the parent.
+    val parentKey = when (name) {
+        "Tags" -> "Tags"
+        "Studios" -> "Studios"
+        "Genres" -> "Genres"
+        "IsFavorite" -> "Favorite"
+        else -> null
+    }
+    if (parentKey != null) {
+        val only = rule.extraBool("OnlyParent$parentKey") == true
+        val include = rule.extraBool("IncludeParent$parentKey") == true
+        DropdownField(
+            label = "Look at",
+            selectedText = when {
+                only -> "Only the parent (series or album)"
+                include -> "The item and its parent"
+                else -> "The item itself"
+            },
+            options = listOf("item" to "The item itself", "both" to "The item and its parent", "only" to "Only the parent (series or album)"),
+            onSelect = { mode ->
+                onChange(
+                    rule.withExtras(
+                        mapOf(
+                            "IncludeParent$parentKey" to if (mode == "item") null else JsonPrimitive(true),
+                            "OnlyParent$parentKey" to if (mode == "only") JsonPrimitive(true) else null,
+                        ),
+                    ),
+                )
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+
+    if (name == "Collections") {
+        SwitchRow("Also match episodes through their series", "Episodes count as members of the collections their series is in", rule.extraBool("IncludeEpisodesWithinSeries") == true) { on ->
+            onChange(rule.withExtra("IncludeEpisodesWithinSeries", if (on) JsonPrimitive(true) else null))
+        }
+        OutlinedTextField(
+            value = rule.extraInt("CollectionSearchDepth")?.toString().orEmpty(),
+            onValueChange = { v ->
+                val depth = v.filter(Char::isDigit).toIntOrNull()?.coerceIn(0, 10)
+                onChange(rule.withExtra("CollectionSearchDepth", if (depth == null || depth == 0) null else JsonPrimitive(depth)))
+            },
+            label = { Text("Search depth (1 to 10)") },
+            supportingText = { Text("Empty: only the collections the item is directly in") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+/** A labelled on/off row. */
+@Composable
+fun SwitchRow(title: String, description: String?, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            if (description != null) Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = checked, onCheckedChange = onChange)
     }
 }

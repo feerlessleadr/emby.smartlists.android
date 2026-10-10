@@ -89,6 +89,31 @@ data class Catalog(
 /** One user an Emby list can belong to (GET /users). */
 data class EmbyUser(val id: String, val name: String)
 
+/** A custom image of a list (Primary, Backdrop, ...). */
+data class ImageInfo(val type: String, val fileName: String, val size: Long) {
+    companion object {
+        fun from(o: JsonObject) = ImageInfo(
+            type = o.stringAt("ImageType").orEmpty(),
+            fileName = o.stringAt("FileName").orEmpty(),
+            size = (o["FileSize"] as? JsonPrimitive)?.content?.toLongOrNull() ?: 0L,
+        )
+    }
+}
+
+/** The image types a list can have (the plugin's valid types), with plain labels. */
+val IMAGE_TYPE_LABELS = listOf(
+    "Primary" to "Poster / cover",
+    "Backdrop" to "Backdrop",
+    "Banner" to "Banner",
+    "Thumb" to "Thumbnail",
+    "Logo" to "Logo",
+    "Disc" to "Disc",
+    "Art" to "Clear art",
+    "Box" to "Box front",
+    "BoxRear" to "Box rear",
+    "Menu" to "Menu",
+)
+
 /**
  * A smart list as the API returns it. The JSON is kept whole and edited in place, so properties this app does not
  * know about (or that a newer plugin adds) survive an update untouched.

@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.intOrNull
 import java.util.concurrent.atomic.AtomicLong
 
 /** Stable ids for list items in the editor, so rows keep their state while others are added or removed. */
@@ -26,9 +27,15 @@ data class RuleDraft(
     val extras: JsonObject = JsonObject(emptyMap()),
 ) {
     fun extraBool(name: String): Boolean? = (extras[name] as? JsonPrimitive)?.booleanOrNull
+    fun extraString(name: String): String? = (extras[name] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content
+    fun extraInt(name: String): Int? = (extras[name] as? JsonPrimitive)?.intOrNull
 
     fun withExtra(name: String, value: JsonElement?): RuleDraft =
         copy(extras = JsonObject(extras.toMutableMap().also { if (value == null) it.remove(name) else it[name] = value }))
+
+    /** Sets or clears several extras at once (a null value clears that extra). */
+    fun withExtras(changes: Map<String, JsonElement?>): RuleDraft =
+        copy(extras = JsonObject(extras.toMutableMap().also { m -> changes.forEach { (k, v) -> if (v == null) m.remove(k) else m[k] = v } }))
 }
 
 /** A group of rules that must all match (AND). Groups are alternatives (OR). */
@@ -44,6 +51,86 @@ data class SortDraft(
     val descending: Boolean = false,
     val groupBy: String? = null,
     val within: String? = null,
+    val extras: JsonObject = JsonObject(emptyMap()),
+)
+
+/**
+ * A schedule: when to refresh the list (refresh schedules) or when to enable or disable it (visibility schedules,
+ * which carry an [action]). Only the fields that matter for the [trigger] are written.
+ */
+data class ScheduleDraft(
+    val key: Long = DraftKeys.next(),
+    val trigger: String = "Daily",
+    /** Time of day, "HH:mm". */
+    val time: String = "00:00",
+    /** 0 = Sunday ... 6 = Saturday. */
+    val dayOfWeek: Int = 0,
+    val dayOfMonth: Int = 1,
+    val month: Int = 1,
+    /** A .NET time span such as "01:00:00" or "1.00:00:00". */
+    val interval: String = "01:00:00",
+    val action: String? = null,
+    val extras: JsonObject = JsonObject(emptyMap()),
+) {
+    fun toJson(): JsonObject {
+        val keep = extras.filterKeys { it !in SCHEDULE_KEYS }.toMutableMap()
+        keep["Trigger"] = JsonPrimitive(trigger)
+        val timeText = JsonPrimitive("$time:00")
+        when (trigger) {
+            "Daily" -> keep["Time"] = timeText
+            "Weekly" -> {
+                keep["DayOfWeek"] = JsonPrimitive(dayOfWeek)
+                keep["Time"] = timeText
+            }
+            "Monthly" -> {
+                keep["DayOfMonth"] = JsonPrimitive(dayOfMonth)
+                keep["Time"] = timeText
+            }
+            "Yearly" -> {
+                keep["Month"] = JsonPrimitive(month)
+                keep["DayOfMonth"] = JsonPrimitive(dayOfMonth)
+                keep["Time"] = timeText
+            }
+            "Interval" -> keep["Interval"] = JsonPrimitive(interval)
+        }
+        if (action != null) keep["Action"] = JsonPrimitive(action)
+        return JsonObject(keep)
+    }
+
+    companion object {
+        private val SCHEDULE_KEYS = setOf("Trigger", "Time", "DayOfWeek", "DayOfMonth", "Month", "Interval", "Action")
+
+        fun from(json: JsonObject): ScheduleDraft = ScheduleDraft(
+            trigger = json.stringAt("Trigger") ?: "Daily",
+            time = json.stringAt("Time")?.take(5)?.takeIf { it.length == 5 } ?: "00:00",
+            dayOfWeek = json.intOrNullAt("DayOfWeek") ?: dayNameToInt(json.stringAt("DayOfWeek")) ?: 0,
+            dayOfMonth = json.intOrNullAt("DayOfMonth") ?: 1,
+            month = json.intOrNullAt("Month") ?: 1,
+            interval = json.stringAt("Interval") ?: "01:00:00",
+            action = json.stringAt("Action"),
+            extras = JsonObject(json.filterKeys { it !in SCHEDULE_KEYS }),
+        )
+
+        private fun dayNameToInt(name: String?): Int? =
+            listOf("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday").indexOfFirst { it.equals(name, ignoreCase = true) }.takeIf { it >= 0 }
+    }
+}
+
+/** "Pick one group at random" (a post-filter step before sorting and limits). */
+data class RandomGroupDraft(
+    val enabled: Boolean = false,
+    val groupBy: String? = null,
+    val minimumItems: String = "",
+)
+
+/** Items woven between a playlist's main items: their own rules, media types, order and spacing. */
+data class BumperDraft(
+    val groups: List<GroupDraft> = emptyList(),
+    val mediaTypes: Set<String> = emptySet(),
+    /** "Random", "Name" or "ReleaseDate". */
+    val order: String = "Random",
+    /** One bumper after every this many main items. */
+    val interval: String = "1",
     val extras: JsonObject = JsonObject(emptyMap()),
 )
 
@@ -89,6 +176,17 @@ fun fieldsFor(catalog: Catalog, mediaTypes: Set<String>): List<FieldInfo> {
     }
 }
 
+/** Fields a "pick one group at random" step can group by (the plugin's supported list). */
+val RANDOM_GROUP_FIELDS = listOf(
+    "SeriesName" to "Series name",
+    "Genres" to "Genres",
+    "Studios" to "Studios",
+    "Tags" to "Tags",
+    "Artists" to "Artists",
+    "AlbumArtists" to "Album artists",
+    "Album" to "Album",
+)
+
 /** A smart list being created or edited. */
 data class ListDraft(
     /** The list JSON this draft came from (null for a new list): properties not shown here are kept on save. */
@@ -96,10 +194,14 @@ data class ListDraft(
     val type: String = "Playlist",
     val name: String = "",
     val enabled: Boolean = true,
-    /** The Emby user a new list belongs to. Fixed once the list exists. */
+    /** Collections: the user whose watch state rules use. Playlists use [users] instead. */
     val ownerId: String? = null,
-    /** An existing playlist shared with several users (or everyone): its users are edited on the web page. */
-    val shared: Boolean = false,
+    /** Playlists: the users who get a playlist (ignored when [allUsers]). */
+    val users: List<String> = emptyList(),
+    /** Playlists: one playlist for every current and future user. */
+    val allUsers: Boolean = false,
+    /** Playlists for a single user: visible to everyone. */
+    val isPublic: Boolean = false,
     val mediaTypes: Set<String> = emptySet(),
     val groups: List<GroupDraft> = emptyList(),
     val sorts: List<SortDraft> = listOf(SortDraft(sortBy = "Name")),
@@ -107,9 +209,26 @@ data class ListDraft(
     val maxPlayTimeMinutes: String = "",
     val minItems: String = "",
     val autoRefresh: String = "Never",
+    val schedules: List<ScheduleDraft> = emptyList(),
+    val visibilitySchedules: List<ScheduleDraft> = emptyList(),
+    // ----- presentation on the Emby list -----
+    val sortTitle: String = "",
+    val overview: String = "",
+    /** Null: the plugin does not manage tags. An empty list clears the managed tags. */
+    val tags: List<String>? = null,
+    /** Null: the plugin does not manage the favorite state. */
+    val favorite: Boolean? = null,
+    // ----- advanced -----
+    val includeExtras: Boolean = false,
+    val matchByMembers: Boolean = false,
+    val groupIntoCollections: Boolean = false,
+    val randomGroup: RandomGroupDraft = RandomGroupDraft(),
+    val similarityFields: List<String> = emptyList(),
+    val bumpers: BumperDraft? = null,
 ) {
     val isNew: Boolean get() = original == null
     val isCollection: Boolean get() = type == "Collection"
+    val hasSimilarRule: Boolean get() = groups.any { g -> g.rules.any { it.field == "SimilarTo" } }
 
     /** The first problem a person has to fix before saving, or null. The server validates again. */
     fun validate(catalog: Catalog?): String? {
@@ -118,8 +237,31 @@ data class ListDraft(
         if (!isCollection) {
             val bad = mediaTypes.filter { it in COLLECTION_ONLY_MEDIA_TYPES }
             if (bad.isNotEmpty()) return "A playlist cannot hold: ${bad.joinToString(", ")}. Use a collection for those."
+            if (!allUsers && users.isEmpty()) return "Pick at least one user the playlist is for."
+        } else if (ownerId.isNullOrBlank()) {
+            return "Pick the user whose watch state the rules use."
         }
-        if (isNew && ownerId.isNullOrBlank()) return "Pick the user the list is for."
+        ruleProblem(groups, catalog)?.let { return it }
+        for (sort in sorts) {
+            val info = catalog?.sorts?.firstOrNull { it.value == sort.sortBy }
+            if (info?.roundRobin == true && sort.groupBy.isNullOrBlank()) return "Pick what to group by for \"${info.label}\"."
+        }
+        for ((label, text) in listOf("Maximum items" to maxItems, "Maximum play time" to maxPlayTimeMinutes, "Minimum items" to minItems)) {
+            if (text.isNotBlank() && (text.toIntOrNull() ?: -1) < 0) return "$label must be a whole number (or empty)."
+        }
+        if (randomGroup.enabled) {
+            if (randomGroup.groupBy.isNullOrBlank()) return "Pick what to group by for the random group."
+            if (randomGroup.minimumItems.isNotBlank() && (randomGroup.minimumItems.toIntOrNull() ?: -1) < 0) return "Minimum items in a group must be a whole number (or empty)."
+        }
+        bumpers?.let { b ->
+            if (b.mediaTypes.isEmpty()) return "Bumpers: pick the media type of the bumpers."
+            ruleProblem(b.groups, catalog)?.let { return "Bumpers: $it" }
+            if ((b.interval.toIntOrNull() ?: 0) < 1) return "Bumpers: insert one after a whole number of items, 1 or more."
+        }
+        return null
+    }
+
+    private fun ruleProblem(groups: List<GroupDraft>, catalog: Catalog?): String? {
         for (group in groups) {
             for (rule in group.rules) {
                 if (rule.value.isBlank()) {
@@ -127,13 +269,6 @@ data class ListDraft(
                     return "Fill in the value for the \"$label\" rule, or remove it."
                 }
             }
-        }
-        for (sort in sorts) {
-            val info = catalog?.sorts?.firstOrNull { it.value == sort.sortBy }
-            if (info?.roundRobin == true && sort.groupBy.isNullOrBlank()) return "Pick what to group by for \"${info.label}\"."
-        }
-        for ((label, text) in listOf("Maximum items" to maxItems, "Maximum play time" to maxPlayTimeMinutes, "Minimum items" to minItems)) {
-            if (text.isNotBlank() && (text.toIntOrNull() ?: -1) < 0) return "$label must be a whole number (or empty)."
         }
         return null
     }
@@ -144,14 +279,8 @@ data class ListDraft(
         result["Type"] = JsonPrimitive(type)
         result["Name"] = JsonPrimitive(name.trim())
         result["Enabled"] = JsonPrimitive(enabled)
-        result["MediaTypes"] = JsonArray(mediaTypes.sortedBy { t -> MEDIA_TYPE_LABELS.indexOfFirst { it.first == t }.let { if (it < 0) 99 else it } }.map { JsonPrimitive(it) })
-        result["ExpressionSets"] = JsonArray(
-            groups.filter { it.rules.isNotEmpty() }.map { group ->
-                JsonObject(
-                    group.extras.toMutableMap().also { it["Expressions"] = JsonArray(group.rules.map(::ruleJson)) },
-                )
-            },
-        )
+        result["MediaTypes"] = mediaTypesJson(mediaTypes)
+        result["ExpressionSets"] = setsJson(groups)
         val order = (original?.get("Order") as? JsonObject)?.toMutableMap() ?: mutableMapOf()
         order["SortOptions"] = JsonArray(sorts.map(::sortJson))
         result["Order"] = JsonObject(order)
@@ -159,9 +288,80 @@ data class ListDraft(
         result["MaxPlayTimeMinutes"] = maxPlayTimeMinutes.trim().toIntOrNull()?.let { JsonPrimitive(it) } ?: JsonNull
         result["MinItems"] = minItems.trim().toIntOrNull()?.let { JsonPrimitive(it) } ?: JsonNull
         result["AutoRefresh"] = JsonPrimitive(autoRefresh)
-        if (isNew && !ownerId.isNullOrBlank()) result["UserId"] = JsonPrimitive(ownerId)
+        result["Schedules"] = JsonArray(schedules.map { it.toJson() })
+        result["VisibilitySchedules"] = JsonArray(visibilitySchedules.map { it.toJson() })
+
+        optionalString(result, "SortTitle", sortTitle)
+        optionalString(result, "Overview", overview)
+        if (tags != null) result["Tags"] = JsonArray(tags.map { JsonPrimitive(it) }) else result.remove("Tags")
+        if (favorite != null) result["Favorite"] = JsonPrimitive(favorite) else result.remove("Favorite")
+
+        result["IncludeExtras"] = JsonPrimitive(includeExtras)
+        result["MatchByMembers"] = JsonPrimitive(matchByMembers)
+        result["GroupIntoCollections"] = JsonPrimitive(isCollection && groupIntoCollections)
+        if (randomGroup.enabled) {
+            result["RandomGroupSelection"] = JsonObject(
+                mapOf(
+                    "Enabled" to JsonPrimitive(true),
+                    "GroupBy" to JsonPrimitive(randomGroup.groupBy.orEmpty()),
+                    "MinimumItems" to (randomGroup.minimumItems.trim().toIntOrNull()?.let { JsonPrimitive(it) } ?: JsonNull),
+                ),
+            )
+        } else {
+            result.remove("RandomGroupSelection")
+        }
+        result["SimilarityComparisonFields"] = JsonArray(if (hasSimilarRule) similarityFields.map { JsonPrimitive(it) } else emptyList())
+
+        if (isCollection) {
+            result.remove("Bumpers")
+            ownerId?.takeIf { it.isNotBlank() }?.let { result["UserId"] = JsonPrimitive(it) }
+        } else {
+            writePlaylistUsers(result)
+            if (bumpers != null) result["Bumpers"] = bumperJson(bumpers) else result.remove("Bumpers")
+        }
         return JsonObject(result)
     }
+
+    private fun optionalString(target: MutableMap<String, JsonElement>, key: String, value: String) {
+        if (value.isBlank()) target.remove(key) else target[key] = JsonPrimitive(value.trim())
+    }
+
+    /** Users of a playlist: keeps the Emby playlist id of users who stay, so their playlists are updated, not recreated. */
+    private fun writePlaylistUsers(target: MutableMap<String, JsonElement>) {
+        val existing = (original?.get("UserPlaylists") as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+        target["AllUsers"] = JsonPrimitive(allUsers)
+        target["UserPlaylists"] = if (allUsers) {
+            JsonArray(emptyList())
+        } else {
+            JsonArray(
+                users.map { id ->
+                    val previous = existing.firstOrNull { (it["UserId"] as? JsonPrimitive)?.content.equals(id, ignoreCase = true) }
+                    JsonObject((previous?.toMutableMap() ?: mutableMapOf()).also { it["UserId"] = JsonPrimitive(id) })
+                },
+            )
+        }
+        target["Public"] = JsonPrimitive(!allUsers && users.size == 1 && isPublic)
+        target.remove("UserId")
+    }
+
+    private fun mediaTypesJson(types: Set<String>) = JsonArray(
+        types.sortedBy { t -> MEDIA_TYPE_LABELS.indexOfFirst { it.first == t }.let { if (it < 0) 99 else it } }.map { JsonPrimitive(it) },
+    )
+
+    private fun setsJson(groups: List<GroupDraft>) = JsonArray(
+        groups.filter { it.rules.isNotEmpty() }.map { group ->
+            JsonObject(group.extras.toMutableMap().also { it["Expressions"] = JsonArray(group.rules.map(::ruleJson)) })
+        },
+    )
+
+    private fun bumperJson(b: BumperDraft): JsonObject = JsonObject(
+        b.extras.toMutableMap().also {
+            it["ExpressionSets"] = setsJson(b.groups)
+            it["MediaTypes"] = mediaTypesJson(b.mediaTypes)
+            it["BumperOrder"] = JsonPrimitive(b.order)
+            it["Interval"] = JsonPrimitive(b.interval.toIntOrNull() ?: 1)
+        },
+    )
 
     private fun ruleJson(rule: RuleDraft): JsonObject = JsonObject(
         rule.extras.toMutableMap().also {
@@ -184,18 +384,10 @@ data class ListDraft(
         /** Reads an existing list into an editable draft. */
         fun from(doc: SmartListDoc): ListDraft {
             val json = doc.json
-            val userPlaylists = (json["UserPlaylists"] as? JsonArray).orEmpty()
-            val shared = (json["AllUsers"] as? JsonPrimitive)?.booleanOrNull == true ||
-                (json["Public"] as? JsonPrimitive)?.booleanOrNull == true ||
-                userPlaylists.size > 1
-            val owner = doc.userId ?: userPlaylists.firstNotNullOfOrNull { ((it as? JsonObject)?.get("UserId") as? JsonPrimitive)?.takeIf { p -> p !is JsonNull }?.content }
+            val userPlaylists = (json["UserPlaylists"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+            val users = userPlaylists.mapNotNull { it.stringAt("UserId") }
+            val allUsers = (json["AllUsers"] as? JsonPrimitive)?.booleanOrNull == true
 
-            val groups = (json["ExpressionSets"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.map { set ->
-                GroupDraft(
-                    rules = (set["Expressions"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.map(::ruleFrom),
-                    extras = JsonObject(set.filterKeys { it != "Expressions" }),
-                )
-            }
             val sorts = doc.sortOptions.map { o ->
                 SortDraft(
                     sortBy = o.stringAt("SortBy").orEmpty(),
@@ -205,22 +397,59 @@ data class ListDraft(
                     extras = JsonObject(o.filterKeys { it !in setOf("SortBy", "SortOrder", "GroupByField", "WithinGroupOrder") }),
                 )
             }
+            val random = json["RandomGroupSelection"] as? JsonObject
+            val bumper = json["Bumpers"] as? JsonObject
+
             return ListDraft(
                 original = json,
                 type = doc.type,
                 name = doc.name,
                 enabled = doc.enabled,
-                ownerId = owner,
-                shared = shared,
+                ownerId = doc.userId,
+                users = users.ifEmpty { listOfNotNull(doc.userId) },
+                allUsers = allUsers,
+                isPublic = (json["Public"] as? JsonPrimitive)?.booleanOrNull == true,
                 mediaTypes = doc.mediaTypes.toSet(),
-                groups = groups,
+                groups = groupsFrom(json["ExpressionSets"]),
                 sorts = sorts.ifEmpty { listOf(SortDraft(sortBy = "NoOrder")) },
                 maxItems = doc.maxItems?.toString().orEmpty(),
                 maxPlayTimeMinutes = doc.maxPlayTimeMinutes?.toString().orEmpty(),
                 minItems = doc.minItems?.toString().orEmpty(),
                 autoRefresh = doc.autoRefresh,
+                schedules = (json["Schedules"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.map(ScheduleDraft::from),
+                visibilitySchedules = (json["VisibilitySchedules"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.map(ScheduleDraft::from),
+                sortTitle = json.stringAt("SortTitle").orEmpty(),
+                overview = json.stringAt("Overview").orEmpty(),
+                tags = (json["Tags"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content },
+                favorite = (json["Favorite"] as? JsonPrimitive)?.booleanOrNull,
+                includeExtras = (json["IncludeExtras"] as? JsonPrimitive)?.booleanOrNull == true,
+                matchByMembers = (json["MatchByMembers"] as? JsonPrimitive)?.booleanOrNull == true,
+                groupIntoCollections = (json["GroupIntoCollections"] as? JsonPrimitive)?.booleanOrNull == true,
+                randomGroup = RandomGroupDraft(
+                    enabled = (random?.get("Enabled") as? JsonPrimitive)?.booleanOrNull == true,
+                    groupBy = random?.stringAt("GroupBy"),
+                    minimumItems = random?.intOrNullAt("MinimumItems")?.toString().orEmpty(),
+                ),
+                similarityFields = (json["SimilarityComparisonFields"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.content },
+                bumpers = bumper?.let {
+                    BumperDraft(
+                        groups = groupsFrom(it["ExpressionSets"]),
+                        mediaTypes = (it["MediaTypes"] as? JsonArray).orEmpty().mapNotNull { t -> (t as? JsonPrimitive)?.content }.toSet(),
+                        order = it.stringAt("BumperOrder") ?: "Random",
+                        interval = (it.intOrNullAt("Interval") ?: 1).toString(),
+                        extras = JsonObject(it.filterKeys { k -> k !in setOf("ExpressionSets", "MediaTypes", "BumperOrder", "Interval") }),
+                    )
+                },
             )
         }
+
+        private fun groupsFrom(sets: JsonElement?): List<GroupDraft> =
+            (sets as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.map { set ->
+                GroupDraft(
+                    rules = (set["Expressions"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.map(::ruleFrom),
+                    extras = JsonObject(set.filterKeys { it != "Expressions" }),
+                )
+            }
 
         private fun ruleFrom(json: JsonObject) = RuleDraft(
             field = json.ruleField(),

@@ -131,4 +131,48 @@ class ApiClientTest {
             sent,
         )
     }
+
+    @Test fun `an image upload is a multipart form with the type and the file, token in the header`() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"ImageType":"Primary","FileName":"primary.png","ContentType":"image/png","FileSize":4}"""))
+        val info = client().uploadImage("11111111-1111-1111-1111-111111111111", "Primary", "image.png", "image/png", byteArrayOf(1, 2, 3, 4))
+
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals("/emby/Plugins/SmartLists/11111111-1111-1111-1111-111111111111/images", request.path)
+        assertEquals("tok", request.getHeader("X-Emby-Token"))
+        assertTrue(request.getHeader("Content-Type")!!.startsWith("multipart/form-data"))
+        val body = request.body.readUtf8()
+        assertTrue(body.contains("name=\"imageType\""))
+        assertTrue(body.contains("Primary"))
+        assertTrue(body.contains("name=\"file\"; filename=\"image.png\""))
+        assertEquals("Primary", info.type)
+        assertEquals(4L, info.size)
+    }
+
+    @Test fun `images are listed, fetched with the token and deleted`() = runBlocking {
+        server.enqueue(MockResponse().setBody("""[{"ImageType":"Primary","FileName":"primary.jpg","ContentType":"image/jpeg","FileSize":10},{"ImageType":"Backdrop","FileName":"backdrop.png","ContentType":"image/png","FileSize":20}]"""))
+        server.enqueue(MockResponse().setBody("PIXELS"))
+        server.enqueue(MockResponse().setResponseCode(204))
+
+        val api = client()
+        val images = api.images("abc")
+        assertEquals(listOf("Primary", "Backdrop"), images.map { it.type })
+        assertEquals("PIXELS", String(api.imageBytes("abc", "Primary")))
+        api.deleteImage("abc", "Backdrop")
+
+        val paths = (1..3).map { server.takeRequest() }.map { "${it.method} ${it.path} token=${it.getHeader("X-Emby-Token")}" }
+        assertEquals(
+            listOf(
+                "GET /emby/Plugins/SmartLists/abc/images token=tok",
+                "GET /emby/Plugins/SmartLists/abc/images/Primary/file token=tok",
+                "DELETE /emby/Plugins/SmartLists/abc/images/Backdrop token=tok",
+            ),
+            paths,
+        )
+    }
+
+    @Test fun `similarity fields come from the older fields endpoint`() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"SimilarityComparisonFields":[{"Value":"Genre","Label":"Genre"},{"Value":"Tags","Label":"Tags"}],"Other":[]}"""))
+        assertEquals(listOf("Genre", "Tags"), client().similarityFields().map { it.value })
+    }
 }

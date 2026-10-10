@@ -19,7 +19,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -27,31 +30,35 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.feerlessleadr.embysmartlists.data.BumperDraft
 import com.feerlessleadr.embysmartlists.data.COLLECTION_ONLY_MEDIA_TYPES
 import com.feerlessleadr.embysmartlists.data.Catalog
-import com.feerlessleadr.embysmartlists.data.GroupDraft
 import com.feerlessleadr.embysmartlists.data.ListDraft
 import com.feerlessleadr.embysmartlists.data.MEDIA_TYPE_LABELS
+import com.feerlessleadr.embysmartlists.data.RANDOM_GROUP_FIELDS
+import com.feerlessleadr.embysmartlists.data.ScheduleDraft
 import com.feerlessleadr.embysmartlists.data.SortDraft
 import com.feerlessleadr.embysmartlists.data.Templates
 import com.feerlessleadr.embysmartlists.data.fieldsFor
@@ -125,12 +132,27 @@ private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) 
     }
 }
 
+/** A section that folds away: for the less common options. [summary] says what is inside while it is closed. */
+@Composable
+private fun CollapsibleSection(title: String, summary: String, startOpen: Boolean, content: @Composable ColumnScope.() -> Unit) {
+    var open by rememberSaveable(title) { mutableStateOf(startOpen) }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(Modifier.fillMaxWidth().clickable { open = !open }, verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                if (!open) Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Icon(if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore, contentDescription = if (open) "Collapse" else "Expand")
+        }
+        if (open) content()
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun EditorForm(vm: EditorViewModel, state: EditorUiState, draft: ListDraft, catalog: Catalog) {
     val fields = remember(catalog, draft.mediaTypes) { fieldsFor(catalog, draft.mediaTypes) }
-    var addRuleTo by remember { mutableStateOf<Long?>(null) }
-    val lists = catalog
+    val setDraft: ((ListDraft) -> ListDraft) -> Unit = { change -> vm.update(change) }
 
     Column(
         Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
@@ -144,47 +166,40 @@ private fun EditorForm(vm: EditorViewModel, state: EditorUiState, draft: ListDra
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(
                         selected = !draft.isCollection,
-                        onClick = {
-                            vm.update { d -> d.copy(type = "Playlist", mediaTypes = d.mediaTypes - COLLECTION_ONLY_MEDIA_TYPES) }
-                        },
+                        onClick = { setDraft { d -> d.copy(type = "Playlist", mediaTypes = d.mediaTypes - COLLECTION_ONLY_MEDIA_TYPES) } },
                         label = { Text("Playlist") },
                     )
-                    FilterChip(selected = draft.isCollection, onClick = { vm.update { it.copy(type = "Collection") } }, label = { Text("Collection") })
+                    FilterChip(selected = draft.isCollection, onClick = { setDraft { it.copy(type = "Collection") } }, label = { Text("Collection") })
                 }
             } else {
                 Text(draft.type, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             OutlinedTextField(
                 value = draft.name,
-                onValueChange = { v -> vm.update { it.copy(name = v) } },
+                onValueChange = { v -> setDraft { it.copy(name = v) } },
                 label = { Text("Name") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
-            if (draft.isNew) {
+
+            if (draft.isCollection) {
                 DropdownField(
-                    label = if (draft.isCollection) "Watch state of" else "For user",
-                    selectedText = state.users.firstOrNull { it.id == draft.ownerId }?.name ?: "Choose a user",
+                    label = "Watch state of",
+                    selectedText = state.users.firstOrNull { it.id.equals(draft.ownerId, ignoreCase = true) }?.name ?: "Choose a user",
                     options = state.users.map { it.id to it.name },
-                    onSelect = { id -> vm.update { it.copy(ownerId = id) } },
+                    onSelect = { id -> setDraft { it.copy(ownerId = id) } },
                     modifier = Modifier.fillMaxWidth(),
                 )
-            } else {
-                val owner = state.users.firstOrNull { it.id.equals(draft.ownerId, ignoreCase = true) }?.name
                 Text(
-                    buildString {
-                        append(if (draft.isCollection) "Watch state of: " else "For user: ")
-                        append(owner ?: "unknown")
-                        if (draft.shared) append(" (shared with other users; change who it is for on the web page)")
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
+                    "The rules about watched, favorite and similar use this user's data.",
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            } else {
+                PlaylistUsers(draft, state, setDraft)
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Enabled", Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-                Switch(checked = draft.enabled, onCheckedChange = { v -> vm.update { it.copy(enabled = v) } })
-            }
+
+            SwitchRow("Enabled", "A disabled list keeps its settings but has no Emby list", draft.enabled) { on -> setDraft { it.copy(enabled = on) } }
         }
 
         // ----- media types -----
@@ -196,7 +211,7 @@ private fun EditorForm(vm: EditorViewModel, state: EditorUiState, draft: ListDra
                 offered.forEach { (value, label) ->
                     FilterChip(
                         selected = value in draft.mediaTypes,
-                        onClick = { vm.update { d -> d.copy(mediaTypes = if (value in d.mediaTypes) d.mediaTypes - value else d.mediaTypes + value) } },
+                        onClick = { setDraft { d -> d.copy(mediaTypes = if (value in d.mediaTypes) d.mediaTypes - value else d.mediaTypes + value) } },
                         label = { Text(label) },
                     )
                 }
@@ -212,73 +227,33 @@ private fun EditorForm(vm: EditorViewModel, state: EditorUiState, draft: ListDra
 
         // ----- rules -----
         Section("Rules") {
-            Text(
-                if (draft.groups.isEmpty()) {
-                    "No rules: everything of the chosen media types is included."
-                } else {
-                    "An item is included when it matches every rule in at least one group."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            RuleGroupsEditor(
+                groups = draft.groups,
+                fields = fields,
+                catalog = catalog,
+                libraries = state.libraries,
+                users = state.users,
+                emptyHint = "No rules: everything of the chosen media types is included.",
+                onGroups = { change -> setDraft { d -> d.copy(groups = change(d.groups)) } },
             )
-            draft.groups.forEachIndexed { index, group ->
-                if (index > 0) Text("or", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 4.dp))
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        group.rules.forEach { rule ->
-                            androidx.compose.runtime.key(rule.key) {
-                                RuleCard(
-                                    rule = rule,
-                                    catalog = catalog,
-                                    fields = fields,
-                                    libraries = state.libraries,
-                                    onChange = { changed ->
-                                        vm.update { d -> d.mapGroup(group.key) { g -> g.copy(rules = g.rules.map { if (it.key == rule.key) changed else it }) } }
-                                    },
-                                    onDelete = {
-                                        vm.update { d -> d.mapGroup(group.key) { g -> g.copy(rules = g.rules.filterNot { it.key == rule.key }) } }
-                                    },
-                                )
-                            }
-                        }
-                        Row {
-                            TextButton(onClick = { addRuleTo = group.key }) {
-                                Icon(Icons.Default.Add, contentDescription = null, Modifier.size(18.dp))
-                                Text("  Add rule")
-                            }
-                            TextButton(onClick = { vm.update { d -> d.copy(groups = d.groups.filterNot { it.key == group.key }) } }) {
-                                Text("Remove group", color = MaterialTheme.colorScheme.error)
-                            }
-                        }
-                    }
-                }
-            }
-            TextButton(onClick = {
-                val g = GroupDraft(rules = emptyList())
-                vm.update { d -> d.copy(groups = d.groups + g) }
-                addRuleTo = g.key
-            }) {
-                Icon(Icons.Default.Add, contentDescription = null, Modifier.size(18.dp))
-                Text(if (draft.groups.isEmpty()) "  Add a rule" else "  Add another group (or)")
-            }
         }
 
         // ----- sorting -----
         Section("Sorting") {
             draft.sorts.forEachIndexed { index, sort ->
-                androidx.compose.runtime.key(sort.key) {
+                key(sort.key) {
                     SortRow(
                         sort = sort,
                         catalog = catalog,
                         canRemove = draft.sorts.size > 1,
-                        onChange = { changed -> vm.update { d -> d.copy(sorts = d.sorts.map { if (it.key == sort.key) changed else it }) } },
-                        onRemove = { vm.update { d -> d.copy(sorts = d.sorts.filterNot { it.key == sort.key }) } },
+                        onChange = { changed -> setDraft { d -> d.copy(sorts = d.sorts.map { if (it.key == sort.key) changed else it }) } },
+                        onRemove = { setDraft { d -> d.copy(sorts = d.sorts.filterNot { it.key == sort.key }) } },
                         label = if (index == 0) "Sort by" else "Then by",
                     )
                 }
             }
             if (draft.sorts.size < 3) {
-                TextButton(onClick = { vm.update { d -> d.copy(sorts = d.sorts + SortDraft(sortBy = "Name")) } }) {
+                TextButton(onClick = { setDraft { d -> d.copy(sorts = d.sorts + SortDraft(sortBy = "Name")) } }) {
                     Icon(Icons.Default.Add, contentDescription = null, Modifier.size(18.dp))
                     Text("  Add a sort")
                 }
@@ -287,45 +262,298 @@ private fun EditorForm(vm: EditorViewModel, state: EditorUiState, draft: ListDra
 
         // ----- limits -----
         Section("Limits") {
-            NumberField("Maximum items", draft.maxItems, "Empty means no limit") { v -> vm.update { it.copy(maxItems = v) } }
-            NumberField("Maximum play time (minutes)", draft.maxPlayTimeMinutes, "Empty means no limit") { v -> vm.update { it.copy(maxPlayTimeMinutes = v) } }
-            NumberField("Minimum items", draft.minItems, "The Emby list is hidden while fewer items match") { v -> vm.update { it.copy(minItems = v) } }
+            NumberField("Maximum items", draft.maxItems, "Empty means no limit") { v -> setDraft { it.copy(maxItems = v) } }
+            NumberField("Maximum play time (minutes)", draft.maxPlayTimeMinutes, "Empty means no limit") { v -> setDraft { it.copy(maxPlayTimeMinutes = v) } }
+            NumberField("Minimum items", draft.minItems, "The Emby list is hidden while fewer items match") { v -> setDraft { it.copy(minItems = v) } }
         }
 
         // ----- refresh -----
         Section("Refresh") {
             DropdownField(
                 label = "Update the list",
-                selectedText = lists.autoRefreshModes.firstOrNull { it.value == draft.autoRefresh }?.label ?: draft.autoRefresh,
-                options = lists.autoRefreshModes.map { it.value to it.label },
-                onSelect = { v -> vm.update { it.copy(autoRefresh = v) } },
+                selectedText = catalog.autoRefreshModes.firstOrNull { it.value == draft.autoRefresh }?.label ?: draft.autoRefresh,
+                options = catalog.autoRefreshModes.map { it.value to it.label },
+                onSelect = { v -> setDraft { it.copy(autoRefresh = v) } },
                 modifier = Modifier.fillMaxWidth(),
             )
         }
 
-        Box(Modifier.size(48.dp))
-    }
+        CollapsibleSection(
+            title = "Schedules",
+            summary = scheduleSummary(draft),
+            startOpen = draft.schedules.isNotEmpty() || draft.visibilitySchedules.isNotEmpty(),
+        ) {
+            Text("Refresh at set times", style = MaterialTheme.typography.titleSmall)
+            draft.schedules.forEach { s ->
+                key(s.key) {
+                    ScheduleCard(
+                        schedule = s,
+                        visibility = false,
+                        onChange = { changed -> setDraft { d -> d.copy(schedules = d.schedules.map { if (it.key == s.key) changed else it }) } },
+                        onDelete = { setDraft { d -> d.copy(schedules = d.schedules.filterNot { it.key == s.key }) } },
+                    )
+                }
+            }
+            TextButton(onClick = { setDraft { d -> d.copy(schedules = d.schedules + ScheduleDraft()) } }) {
+                Icon(Icons.Default.Add, contentDescription = null, Modifier.size(18.dp))
+                Text("  Add a refresh schedule")
+            }
+            Text("Show or hide the list at set times", style = MaterialTheme.typography.titleSmall)
+            draft.visibilitySchedules.forEach { s ->
+                key(s.key) {
+                    ScheduleCard(
+                        schedule = s,
+                        visibility = true,
+                        onChange = { changed -> setDraft { d -> d.copy(visibilitySchedules = d.visibilitySchedules.map { if (it.key == s.key) changed else it }) } },
+                        onDelete = { setDraft { d -> d.copy(visibilitySchedules = d.visibilitySchedules.filterNot { it.key == s.key }) } },
+                    )
+                }
+            }
+            TextButton(onClick = { setDraft { d -> d.copy(visibilitySchedules = d.visibilitySchedules + ScheduleDraft(action = "Enable")) } }) {
+                Icon(Icons.Default.Add, contentDescription = null, Modifier.size(18.dp))
+                Text("  Add a show/hide schedule")
+            }
+        }
 
-    addRuleTo?.let { groupKey ->
-        GroupedPickerDialog(
-            title = "Choose a field",
-            items = fieldPickerItems(fields),
-            selected = null,
-            onPick = { name ->
-                addRuleTo = null
-                catalog.field(name)?.let { f -> vm.update { d -> d.mapGroup(groupKey) { g -> g.copy(rules = g.rules + newRule(f)) } } }
-            },
-            onDismiss = {
-                // A group created just now stays empty if nothing was picked: drop it.
-                vm.update { d -> d.copy(groups = d.groups.filterNot { it.key == groupKey && it.rules.isEmpty() }) }
-                addRuleTo = null
-            },
-        )
+        CollapsibleSection(
+            title = "On the Emby list",
+            summary = presentationSummary(draft),
+            startOpen = draft.sortTitle.isNotBlank() || draft.overview.isNotBlank() || draft.tags != null || draft.favorite != null,
+        ) {
+            OutlinedTextField(
+                value = draft.sortTitle,
+                onValueChange = { v -> setDraft { it.copy(sortTitle = v) } },
+                label = { Text("Sort title") },
+                supportingText = { Text("Empty: Emby sorts by the name") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = draft.overview,
+                onValueChange = { v -> setDraft { it.copy(overview = v) } },
+                label = { Text("Description") },
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            TagsEditor(draft.tags) { tags -> setDraft { it.copy(tags = tags) } }
+            Text("Favorite", style = MaterialTheme.typography.titleSmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = draft.favorite == null, onClick = { setDraft { it.copy(favorite = null) } }, label = { Text("Leave alone") })
+                FilterChip(selected = draft.favorite == true, onClick = { setDraft { it.copy(favorite = true) } }, label = { Text("Favorite") })
+                FilterChip(selected = draft.favorite == false, onClick = { setDraft { it.copy(favorite = false) } }, label = { Text("Not favorite") })
+            }
+        }
+
+        CollapsibleSection(
+            title = "Advanced",
+            summary = advancedSummary(draft),
+            startOpen = draft.includeExtras || draft.matchByMembers || draft.groupIntoCollections || draft.randomGroup.enabled,
+        ) {
+            SwitchRow("Include extras", "Behind the scenes, trailers, deleted scenes and the like", draft.includeExtras) { on -> setDraft { it.copy(includeExtras = on) } }
+            if (draft.mediaTypes.any { it == "Collection" || it == "Playlist" }) {
+                SwitchRow("Match collections and playlists by their items", "Include one when any of its items passes the rules", draft.matchByMembers) { on -> setDraft { it.copy(matchByMembers = on) } }
+            }
+            if (draft.isCollection) {
+                SwitchRow("Replace items with the collection they are in", "Items in no collection stay as they are", draft.groupIntoCollections) { on -> setDraft { it.copy(groupIntoCollections = on) } }
+            }
+            SwitchRow("Pick one group at random", "Keep only the items of one randomly chosen group, before sorting and limits", draft.randomGroup.enabled) { on ->
+                setDraft { it.copy(randomGroup = it.randomGroup.copy(enabled = on, groupBy = it.randomGroup.groupBy ?: "SeriesName")) }
+            }
+            if (draft.randomGroup.enabled) {
+                DropdownField(
+                    label = "Group by",
+                    selectedText = RANDOM_GROUP_FIELDS.firstOrNull { it.first == draft.randomGroup.groupBy }?.second ?: draft.randomGroup.groupBy.orEmpty(),
+                    options = RANDOM_GROUP_FIELDS,
+                    onSelect = { g -> setDraft { it.copy(randomGroup = it.randomGroup.copy(groupBy = g)) } },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                NumberField("Smallest group allowed", draft.randomGroup.minimumItems, "Empty: any size") { v -> setDraft { it.copy(randomGroup = it.randomGroup.copy(minimumItems = v)) } }
+            }
+            if (draft.hasSimilarRule) {
+                Text("Compare \"similar to\" by", style = MaterialTheme.typography.titleSmall)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    state.similarityFields.forEach { option ->
+                        val on = option.value in draft.similarityFields
+                        FilterChip(
+                            selected = on,
+                            onClick = { setDraft { d -> d.copy(similarityFields = if (on) d.similarityFields - option.value else d.similarityFields + option.value) } },
+                            label = { Text(option.label) },
+                        )
+                    }
+                }
+                Text("None ticked: genre and tags", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
+        if (!draft.isCollection) {
+            CollapsibleSection(
+                title = "Bumpers",
+                summary = if (draft.bumpers == null) "Off" else "On",
+                startOpen = draft.bumpers != null,
+            ) {
+                BumpersEditor(draft, state, catalog, setDraft)
+            }
+        }
+
+        if (!draft.isNew) {
+            CollapsibleSection(
+                title = "Images",
+                summary = if (state.images.isEmpty()) "None" else "${state.images.size} custom image(s)",
+                startOpen = state.images.isNotEmpty(),
+            ) {
+                ImagesSection(state, vm)
+            }
+        } else {
+            Text("Save the list first, then edit it to add your own images.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+
+        Box(Modifier.size(48.dp))
     }
 }
 
-private fun ListDraft.mapGroup(key: Long, change: (GroupDraft) -> GroupDraft): ListDraft =
-    copy(groups = groups.map { if (it.key == key) change(it) else it })
+private fun scheduleSummary(d: ListDraft): String {
+    val parts = d.schedules.map { "refresh " + describeSchedule(it) } + d.visibilitySchedules.map { (if (it.action == "Disable") "disable " else "enable ") + describeSchedule(it) }
+    return if (parts.isEmpty()) "None" else parts.joinToString("; ")
+}
+
+private fun presentationSummary(d: ListDraft): String {
+    val parts = listOfNotNull(
+        d.sortTitle.takeIf { it.isNotBlank() }?.let { "sort title" },
+        d.overview.takeIf { it.isNotBlank() }?.let { "description" },
+        d.tags?.let { "tags" },
+        d.favorite?.let { if (it) "favorite" else "not favorite" },
+    )
+    return if (parts.isEmpty()) "Nothing set" else parts.joinToString(", ")
+}
+
+private fun advancedSummary(d: ListDraft): String {
+    val parts = listOfNotNull(
+        if (d.includeExtras) "extras" else null,
+        if (d.matchByMembers) "match by items" else null,
+        if (d.groupIntoCollections) "group into collections" else null,
+        if (d.randomGroup.enabled) "random group" else null,
+    )
+    return if (parts.isEmpty()) "Default" else parts.joinToString(", ")
+}
+
+/** Who a playlist is for: chosen users, everyone, and whether a one-user playlist is public. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PlaylistUsers(draft: ListDraft, state: EditorUiState, setDraft: ((ListDraft) -> ListDraft) -> Unit) {
+    SwitchRow(
+        "A playlist for every user",
+        "Each user, including new ones, gets their own, built from their own watch state",
+        draft.allUsers,
+    ) { on -> setDraft { it.copy(allUsers = on) } }
+
+    if (!draft.allUsers) {
+        Text("For these users", style = MaterialTheme.typography.titleSmall)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            state.users.forEach { user ->
+                val on = draft.users.any { it.equals(user.id, ignoreCase = true) }
+                FilterChip(
+                    selected = on,
+                    onClick = { setDraft { d -> d.copy(users = if (on) d.users.filterNot { it.equals(user.id, ignoreCase = true) } else d.users + user.id) } },
+                    label = { Text(user.name) },
+                )
+            }
+        }
+        if (draft.users.size == 1) {
+            SwitchRow("Public", "Everyone on the server can see this playlist", draft.isPublic) { on -> setDraft { it.copy(isPublic = on) } }
+        }
+        if (!draft.isNew && draft.users.size > 1) {
+            Text(
+                "Removing a user deletes their playlist; adding one creates it.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** The tags put on the Emby list. Off means the plugin leaves the tags alone. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TagsEditor(tags: List<String>?, onChange: (List<String>?) -> Unit) {
+    var typed by remember { mutableStateOf("") }
+    SwitchRow("Manage tags on the Emby list", "Off: the plugin never touches the list's tags", tags != null) { on -> onChange(if (on) emptyList() else null) }
+    if (tags != null) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            tags.forEach { tag ->
+                InputChip(
+                    selected = false,
+                    onClick = { onChange(tags - tag) },
+                    label = { Text(tag) },
+                    trailingIcon = { Icon(Icons.Default.Close, contentDescription = "Remove $tag", modifier = Modifier.size(16.dp)) },
+                )
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = typed,
+                onValueChange = { typed = it },
+                label = { Text("New tag") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(
+                enabled = typed.isNotBlank(),
+                onClick = {
+                    val tag = typed.trim()
+                    if (tag.isNotEmpty() && tags.none { it.equals(tag, ignoreCase = true) }) onChange(tags + tag)
+                    typed = ""
+                },
+            ) { Text("Add") }
+        }
+    }
+}
+
+/** Items woven between a playlist's items (idents, interstitials), picked by their own rules. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun BumpersEditor(draft: ListDraft, state: EditorUiState, catalog: Catalog, setDraft: ((ListDraft) -> ListDraft) -> Unit) {
+    val bumpers = draft.bumpers
+    SwitchRow(
+        "Insert bumpers",
+        "Short items, picked by their own rules, between the list's items. They repeat when there are fewer than needed and do not count toward the limits.",
+        bumpers != null,
+    ) { on -> setDraft { it.copy(bumpers = if (on) BumperDraft(mediaTypes = setOf("Video")) else null) } }
+    if (bumpers == null) return
+
+    val update: ((BumperDraft) -> BumperDraft) -> Unit = { change -> setDraft { d -> d.copy(bumpers = d.bumpers?.let(change)) } }
+
+    Text("Bumper media type", style = MaterialTheme.typography.titleSmall)
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        MEDIA_TYPE_LABELS.filter { it.first !in COLLECTION_ONLY_MEDIA_TYPES }.forEach { (value, label) ->
+            FilterChip(selected = value in bumpers.mediaTypes, onClick = { update { it.copy(mediaTypes = setOf(value)) } }, label = { Text(label) })
+        }
+    }
+    DropdownField(
+        label = "Bumper order",
+        selectedText = listOf("Random" to "Random (reshuffled each refresh)", "Name" to "By name", "ReleaseDate" to "By release date").firstOrNull { it.first == bumpers.order }?.second ?: bumpers.order,
+        options = listOf("Random" to "Random (reshuffled each refresh)", "Name" to "By name", "ReleaseDate" to "By release date"),
+        onSelect = { o -> update { it.copy(order = o) } },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = bumpers.interval,
+        onValueChange = { v -> update { it.copy(interval = v.filter(Char::isDigit)) } },
+        label = { Text("One bumper after every N items") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Text("Which items are bumpers", style = MaterialTheme.typography.titleSmall)
+    RuleGroupsEditor(
+        groups = bumpers.groups,
+        fields = fieldsFor(catalog, bumpers.mediaTypes),
+        catalog = catalog,
+        libraries = state.libraries,
+        users = state.users,
+        emptyHint = "No rules: every item of that media type is a bumper.",
+        onGroups = { change -> update { it.copy(groups = change(it.groups)) } },
+    )
+}
 
 @Composable
 private fun NumberField(label: String, value: String, hint: String, onChange: (String) -> Unit) {

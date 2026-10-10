@@ -115,6 +115,49 @@ class ApiClient(
             ValueOption(name, name)
         }
 
+    /** The fields a "similar to" rule can compare (from the older GET /fields, which the web page also uses). */
+    suspend fun similarityFields(): List<ValueOption> {
+        val root = AppJson.parseToJsonElement(get("$pluginBase/fields")).jsonObject
+        return (root["SimilarityComparisonFields"] as? kotlinx.serialization.json.JsonArray).orEmpty().mapNotNull {
+            val o = it as? JsonObject ?: return@mapNotNull null
+            ValueOption((o["Value"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null, (o["Label"] as? JsonPrimitive)?.contentOrNull.orEmpty())
+        }
+    }
+
+    // ----- custom images -------------------------------------------------------------------------------------
+
+    suspend fun images(id: String): List<ImageInfo> =
+        AppJson.parseToJsonElement(get("$pluginBase/$id/images")).jsonArray.mapNotNull { ImageInfo.from(it as? JsonObject ?: return@mapNotNull null) }
+
+    suspend fun uploadImage(id: String, imageType: String, fileName: String, mimeType: String, bytes: ByteArray): ImageInfo {
+        val body = okhttp3.MultipartBody.Builder()
+            .setType(okhttp3.MultipartBody.FORM)
+            .addFormDataPart("imageType", imageType)
+            .addFormDataPart("file", fileName, bytes.toRequestBody(mimeType.toMediaType()))
+            .build()
+        val text = execute(Request.Builder().url("$pluginBase/$id/images".toHttpUrl()).post(body))
+        return ImageInfo.from(AppJson.parseToJsonElement(text).jsonObject)
+    }
+
+    suspend fun deleteImage(id: String, imageType: String) {
+        send("DELETE", "$pluginBase/$id/images/$imageType", null)
+    }
+
+    /** The image file itself (the plugin serves it only to a signed-in administrator, so it needs the token header). */
+    suspend fun imageBytes(id: String, imageType: String): ByteArray = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url("$pluginBase/$id/images/$imageType/file".toHttpUrl()).header("X-Emby-Token", token ?: throw ApiException(401, "You are signed out.")).get().build()
+        try {
+            http.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) throw ApiException(response.code, describeError(response.code, ""))
+                response.body?.bytes() ?: ByteArray(0)
+            }
+        } catch (e: ApiException) {
+            throw e
+        } catch (e: IOException) {
+            throw ApiException(0, "Could not reach the server: ${e.message ?: "network error"}.")
+        }
+    }
+
     /** Ids of lists that are refreshing or queued right now (best effort; empty when the shape is unfamiliar). */
     suspend fun ongoingListIds(): Set<String> {
         val ongoing = AppJson.parseToJsonElement(get("$pluginBase/Status/Ongoing"))

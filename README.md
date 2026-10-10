@@ -11,15 +11,16 @@ An Android app for managing the [SmartLists plugin](https://github.com/feerlessl
 
 ## Status
 
-Early version (0.2.x). What works today:
+Early version (0.3.x). What works today:
 
 - Sign in (Emby administrator account), with a check that the SmartLists plugin is installed and speaks a compatible API version.
 - See all your smart lists (playlists and collections), how many items they hold and when they were last refreshed, and read their rules, sorting, limits and auto-refresh in plain words.
 - Refresh a list or all lists, enable or disable a list, delete a list (optionally with its Emby playlist/collection).
 - **Create and edit lists:** start from a template (Next Up, Continue Watching) or blank; choose playlist or collection, media types, rules (groups of rules, with inputs that fit each field: libraries as tick boxes, dates, relative dates, yes/no, fixed choices), up to three sorts (including the round-robin sorts), limits and auto-refresh. The rule fields, conditions and sorts come from your server's plugin, so they always match it.
+- **Everything else the web page's list form offers:** playlists for several users or for every user (and public); refresh schedules and show/hide schedules; sort title, description, tags and favorite on the Emby list; custom images (from the phone's photo picker, existing lists); bumpers; advanced options (extras, match by items, group into collections, pick one group at random, "similar to" comparison); and per-rule options (check for a specific user, include items with no date, runtime unit, only the default audio track, look at the parent series/album, collection search depth). Collections can change whose watch state they use.
 - **Settings:** choose a light or dark theme, or follow the phone's setting; see who you are signed in as and sign out.
 
-Not in the app yet: the per-list extras the web page has (custom images, sort title, tags, schedules, several users per playlist, bumpers) are left untouched when you edit a list, but cannot be changed here.
+Not in the app: external lists and the end-user (non-administrator) page, which the plugin does not offer on Emby either. Settings the app does not know about are kept as they are when you save.
 
 ## Requirements
 

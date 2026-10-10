@@ -18,6 +18,7 @@ object Templates {
         "next-up" -> ListDraft(
             name = "Next Up",
             ownerId = ownerId,
+            users = listOfNotNull(ownerId),
             mediaTypes = setOf("Episode"),
             groups = listOf(
                 GroupDraft(
@@ -39,6 +40,7 @@ object Templates {
         "continue-watching" -> ListDraft(
             name = "Continue Watching",
             ownerId = ownerId,
+            users = listOfNotNull(ownerId),
             mediaTypes = setOf("Episode"),
             groups = listOf(
                 GroupDraft(
@@ -54,6 +56,7 @@ object Templates {
 
         else -> ListDraft(
             ownerId = ownerId,
+            users = listOfNotNull(ownerId),
             mediaTypes = setOf("Movie"),
             sorts = listOf(SortDraft(sortBy = "Name")),
         )

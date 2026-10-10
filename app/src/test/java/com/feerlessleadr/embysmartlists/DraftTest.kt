@@ -72,7 +72,7 @@ class DraftTest {
         assertEquals("Renamed", json["Name"]!!.jsonPrimitive.content)
         assertEquals(JsonNull, json["MaxItems"])
         assertEquals("Never", json["AutoRefresh"]!!.jsonPrimitive.content)
-        assertEquals("u1", json["UserId"]!!.jsonPrimitive.content) // kept from the original, not changed
+        assertEquals(listOf("u1"), json["UserPlaylists"]!!.jsonArray.map { it.jsonObject["UserId"]!!.jsonPrimitive.content })
         assertFalse(draft.isNew)
     }
 
@@ -81,7 +81,8 @@ class DraftTest {
         val json = draft.toJson()
 
         assertTrue(draft.isNew)
-        assertEquals("u9", json["UserId"]!!.jsonPrimitive.content)
+        assertEquals(listOf("u9"), json["UserPlaylists"]!!.jsonArray.map { it.jsonObject["UserId"]!!.jsonPrimitive.content })
+        assertFalse(json.containsKey("UserId"))
         assertFalse(json.containsKey("Id"))
         assertEquals(listOf("Movie"), json["MediaTypes"]!!.jsonArray.map { it.jsonPrimitive.content })
     }
@@ -106,7 +107,7 @@ class DraftTest {
 
         assertTrue(ok.copy(name = " ").validate(catalog)!!.contains("name"))
         assertTrue(ok.copy(mediaTypes = emptySet()).validate(catalog)!!.contains("media type"))
-        assertTrue(ok.copy(ownerId = null).validate(catalog)!!.contains("user"))
+        assertTrue(ok.copy(users = emptyList()).validate(catalog)!!.contains("user"))
 
         val template = Templates.draft("next-up", "u1")
         assertTrue(template.validate(catalog)!!.contains("Library Name"))
@@ -163,6 +164,148 @@ class DraftTest {
                 ),
             ),
         )
-        assertTrue(ListDraft.from(doc).shared)
+        assertTrue(ListDraft.from(doc).allUsers)
+    }
+
+    // ----- the rest of the web page's options -----
+
+    private val full = SmartListDoc.parse(
+        """{"Type":"Playlist","Id":"p1","Name":"Full","Enabled":true,"MediaTypes":["Episode"],
+            "UserPlaylists":[{"UserId":"u1","PlaylistId":"101"},{"UserId":"u2","PlaylistId":"102"}],"Public":false,"AllUsers":false,
+            "ExpressionSets":[],"Order":{"SortOptions":[{"SortBy":"Name","SortOrder":"Ascending"}]},
+            "Schedules":[{"Trigger":"Weekly","DayOfWeek":5,"Time":"16:45:00"},{"Trigger":"Interval","Interval":"02:00:00"}],
+            "VisibilitySchedules":[{"Trigger":"Daily","Time":"06:00:00","Action":"Disable","FutureScheduleProp":1}],
+            "SortTitle":"zz","Overview":"About","Tags":["a","b"],"Favorite":true,
+            "IncludeExtras":true,"MatchByMembers":false,"GroupIntoCollections":false,
+            "RandomGroupSelection":{"Enabled":true,"GroupBy":"Genres","MinimumItems":3},
+            "SimilarityComparisonFields":["Genre"],
+            "Bumpers":{"ExpressionSets":[{"Expressions":[{"MemberName":"Tags","Operator":"Contains","TargetValue":"bump"}]}],"MediaTypes":["Video"],"BumperOrder":"Name","Interval":4}}""",
+    )
+
+    @Test fun `schedules are read and written with only the fields their trigger needs`() {
+        val draft = ListDraft.from(full)
+        assertEquals(listOf("Weekly", "Interval"), draft.schedules.map { it.trigger })
+        assertEquals("16:45", draft.schedules[0].time)
+        assertEquals(5, draft.schedules[0].dayOfWeek)
+        assertEquals("Disable", draft.visibilitySchedules.single().action)
+
+        val json = draft.toJson()
+        val weekly = json["Schedules"]!!.jsonArray[0].jsonObject
+        assertEquals("16:45:00", weekly["Time"]!!.jsonPrimitive.content)
+        assertEquals("5", weekly["DayOfWeek"]!!.jsonPrimitive.content)
+        assertFalse(weekly.containsKey("Interval"))
+        val interval = json["Schedules"]!!.jsonArray[1].jsonObject
+        assertEquals("02:00:00", interval["Interval"]!!.jsonPrimitive.content)
+        assertFalse(interval.containsKey("Time"))
+        val visibility = json["VisibilitySchedules"]!!.jsonArray[0].jsonObject
+        assertEquals("Disable", visibility["Action"]!!.jsonPrimitive.content)
+        assertEquals("1", visibility["FutureScheduleProp"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun `a schedule of each kind writes what the plugin expects`() {
+        fun j(s: com.feerlessleadr.embysmartlists.data.ScheduleDraft) = s.toJson().mapValues { it.value.jsonPrimitive.content }
+        val base = com.feerlessleadr.embysmartlists.data.ScheduleDraft(time = "03:15", dayOfWeek = 2, dayOfMonth = 9, month = 11, interval = "1.00:00:00")
+        assertEquals(mapOf("Trigger" to "Daily", "Time" to "03:15:00"), j(base.copy(trigger = "Daily")))
+        assertEquals(mapOf("Trigger" to "Monthly", "DayOfMonth" to "9", "Time" to "03:15:00"), j(base.copy(trigger = "Monthly")))
+        assertEquals(mapOf("Trigger" to "Yearly", "Month" to "11", "DayOfMonth" to "9", "Time" to "03:15:00"), j(base.copy(trigger = "Yearly")))
+        assertEquals(mapOf("Trigger" to "Interval", "Interval" to "1.00:00:00"), j(base.copy(trigger = "Interval")))
+    }
+
+    @Test fun `playlist users keep their emby playlist ids when others change`() {
+        val draft = ListDraft.from(full)
+        assertEquals(listOf("u1", "u2"), draft.users)
+
+        val json = draft.copy(users = listOf("u2", "u3")).toJson()
+        val mappings = json["UserPlaylists"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(listOf("u2", "u3"), mappings.map { it["UserId"]!!.jsonPrimitive.content })
+        assertEquals("102", mappings[0]["PlaylistId"]!!.jsonPrimitive.content) // stays
+        assertFalse(mappings[1].containsKey("PlaylistId")) // new
+        assertEquals("false", json["Public"]!!.jsonPrimitive.content) // two users: never public
+    }
+
+    @Test fun `all users writes an empty mapping and public only applies to one user`() {
+        val everyone = ListDraft.from(full).copy(allUsers = true, isPublic = true).toJson()
+        assertEquals("true", everyone["AllUsers"]!!.jsonPrimitive.content)
+        assertEquals(0, everyone["UserPlaylists"]!!.jsonArray.size)
+        assertEquals("false", everyone["Public"]!!.jsonPrimitive.content)
+
+        val single = ListDraft.from(full).copy(users = listOf("u1"), isPublic = true).toJson()
+        assertEquals("true", single["Public"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun `a collection keeps its owner as the user id and has no bumpers or user playlists`() {
+        val json = ListDraft(type = "Collection", name = "c", ownerId = "u5", mediaTypes = setOf("Movie"), groupIntoCollections = true, bumpers = com.feerlessleadr.embysmartlists.data.BumperDraft()).toJson()
+        assertEquals("u5", json["UserId"]!!.jsonPrimitive.content)
+        assertFalse(json.containsKey("Bumpers"))
+        assertFalse(json.containsKey("UserPlaylists"))
+        assertEquals("true", json["GroupIntoCollections"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun `presentation settings round trip and unmanaged ones are left out`() {
+        val draft = ListDraft.from(full)
+        assertEquals("zz", draft.sortTitle)
+        assertEquals(listOf("a", "b"), draft.tags)
+        assertEquals(true, draft.favorite)
+
+        val cleared = draft.copy(sortTitle = " ", overview = "", tags = null, favorite = null).toJson()
+        assertFalse(cleared.containsKey("SortTitle"))
+        assertFalse(cleared.containsKey("Overview"))
+        assertFalse(cleared.containsKey("Tags"))
+        assertFalse(cleared.containsKey("Favorite"))
+
+        val emptyTags = draft.copy(tags = emptyList()).toJson()
+        assertEquals(0, emptyTags["Tags"]!!.jsonArray.size) // an empty list means "clear the managed tags"
+    }
+
+    @Test fun `advanced options and the random group round trip`() {
+        val draft = ListDraft.from(full)
+        assertTrue(draft.includeExtras)
+        assertTrue(draft.randomGroup.enabled)
+        assertEquals("Genres", draft.randomGroup.groupBy)
+        assertEquals("3", draft.randomGroup.minimumItems)
+
+        val json = draft.toJson()
+        val random = json["RandomGroupSelection"]!!.jsonObject
+        assertEquals("Genres", random["GroupBy"]!!.jsonPrimitive.content)
+        assertEquals("3", random["MinimumItems"]!!.jsonPrimitive.content)
+        assertFalse(draft.copy(randomGroup = draft.randomGroup.copy(enabled = false)).toJson().containsKey("RandomGroupSelection"))
+    }
+
+    @Test fun `similarity fields are only sent while a similar to rule exists`() {
+        val rule = com.feerlessleadr.embysmartlists.data.RuleDraft(field = "SimilarTo", operator = "Equal", value = "Movie")
+        val withRule = ListDraft.from(full).copy(groups = listOf(com.feerlessleadr.embysmartlists.data.GroupDraft(rules = listOf(rule))))
+        assertEquals(1, withRule.toJson()["SimilarityComparisonFields"]!!.jsonArray.size)
+        assertEquals(0, ListDraft.from(full).toJson()["SimilarityComparisonFields"]!!.jsonArray.size)
+    }
+
+    @Test fun `bumpers round trip and are validated`() {
+        val draft = ListDraft.from(full)
+        val bumpers = draft.bumpers!!
+        assertEquals(setOf("Video"), bumpers.mediaTypes)
+        assertEquals("Name", bumpers.order)
+        assertEquals("4", bumpers.interval)
+        assertEquals("Tags", bumpers.groups.single().rules.single().field)
+
+        val sent = draft.toJson()["Bumpers"]!!.jsonObject
+        assertEquals("4", sent["Interval"]!!.jsonPrimitive.content)
+        assertEquals("Name", sent["BumperOrder"]!!.jsonPrimitive.content)
+
+        assertTrue(draft.copy(bumpers = bumpers.copy(mediaTypes = emptySet())).validate(catalog)!!.contains("Bumpers"))
+        assertTrue(draft.copy(bumpers = bumpers.copy(interval = "0")).validate(catalog)!!.contains("Bumpers"))
+        assertNull(draft.copy(bumpers = null).toJson()["Bumpers"])
+    }
+
+    @Test fun `rule extras can be set and cleared`() {
+        val rule = com.feerlessleadr.embysmartlists.data.RuleDraft(field = "Tags", operator = "Contains", value = "x")
+            .withExtras(mapOf("IncludeParentTags" to JsonPrimitive(true), "OnlyParentTags" to JsonPrimitive(true)))
+        assertEquals(true, rule.extraBool("OnlyParentTags"))
+        val cleared = rule.withExtras(mapOf("IncludeParentTags" to null, "OnlyParentTags" to null))
+        assertNull(cleared.extraBool("OnlyParentTags"))
+        assertTrue(cleared.extras.isEmpty())
+    }
+
+    @Test fun `a random group needs something to group by`() {
+        val draft = Templates.draft("blank", "u1").copy(name = "x", randomGroup = com.feerlessleadr.embysmartlists.data.RandomGroupDraft(enabled = true, groupBy = null))
+        assertTrue(draft.validate(catalog)!!.contains("group"))
     }
 }
