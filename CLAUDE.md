@@ -1,5 +1,9 @@
 # Emby SmartLists (Android)
 
+> **SUPERSEDED and frozen.** Its code was merged into Embidextrous (`C:\dev\embidextrous`), which now has the SmartLists screens. Do not add features here. If asked to change SmartLists app behavior, change Embidextrous instead; only touch this repo for an explicit request (for example archiving it).
+>
+> **Persistent docs:** read `C:\dev\_docs\WORKSPACE.md` and `STATUS.md` here before working. `DECISIONS.md` here is a short append-only log (the detailed log is `docs/decisions.md`). The keep-docs-updated rule is in `C:\dev\CLAUDE.md`. This repo is public: keep hostnames, IPs, user names and emails out of it.
+
 Native Android app (Kotlin, Jetpack Compose, Material 3, OkHttp, kotlinx.serialization) that manages the SmartLists plugin on an Emby server through the plugin's HTTP API. Administrator-only, single user (the owner). The plugin lives in https://github.com/feerlessleadr/emby.smartlists (local folder `C:\dev\jellyfin-smartlists-plugin-emby`); its API contract is `docs/api.md` there and is the source of truth for what this app may call. The app checks `GET /info` `ApiVersion` against `SUPPORTED_API_VERSION` (Models.kt).
 
 ## Decisions (do not relitigate without new evidence)
